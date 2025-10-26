@@ -1278,161 +1278,143 @@ body {
 
 /* Enhanced Header Styles */
 .header {
-    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
-    color: var(--color-btn-primary-text);
-    border: none;
-    box-shadow: var(--shadow-lg);
-    overflow: hidden;
-    position: relative;
+  /* Using the gradient and colors from your original file */
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+  color: var(--color-btn-primary-text);
+  border: none;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  position: relative;
+  /* Added padding for proper spacing */
+  padding: var(--space-24);
 }
 
+/* Subtle background pattern from your file */
 .header::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="2" fill="rgba(255,255,255,0.1)"/><circle cx="20" cy="20" r="1" fill="rgba(255,255,255,0.08)"/><circle cx="80" cy="30" r="1.5" fill="rgba(255,255,255,0.06)"/></svg>');
-    opacity: 0.3;
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="2" fill="rgba(255,255,255,0.1)"/><circle cx="20" cy="20" r="1" fill="rgba(255,255,255,0.08)"/><circle cx="80" cy="30" r="1.5" fill="rgba(255,255,255,0.06)"/></svg>');
+  opacity: 0.3;
 }
 
+/* Main content row (Logo + AI Status) */
 .header-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: relative;
-    z-index: 1;
-    margin-bottom: var(--space-16);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+  margin-bottom: var(--space-16);
+  flex-wrap: wrap; /* Added for responsiveness */
+  gap: var(--space-16); /* Added for spacing on wrap */
 }
 
 .logo-section {
-    display: flex;
-    align-items: center;
-    gap: var(--space-16);
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  text-align: left; /* Ensures text aligns left */
 }
 
 .logo-icon {
-    font-size: 3rem;
-    color: var(--color-btn-primary-text);
-    opacity: 0.9;
+  font-size: 3rem;
+  color: var(--color-btn-primary-text);
+  opacity: 0.9;
 }
 
 .header h1 {
-    color: var(--color-btn-primary-text);
-    font-size: var(--font-size-4xl);
-    margin: 0;
-    font-weight: var(--font-weight-bold);
+  color: var(--color-btn-primary-text);
+  font-size: var(--font-size-4xl);
+  margin: 0;
+  font-weight: var(--font-weight-bold);
+}
+
+/* --- IMPORTANT IMPROVEMENT ---
+  This new rule specifically targets the subtitle *inside* the header.
+  It uses the header's light text color and adds opacity to look correct
+  on the dark gradient background.
+*/
+.header .subtitle {
+  color: var(--color-btn-primary-text);
+  font-size: var(--font-size-lg);
+  margin: 0;
+  opacity: 0.85; /* Makes it slightly softer than the H1 */
+  font-weight: var(--font-weight-normal);
 }
 
 .ai-status-container {
-    display: flex;
-    align-items: center;
+  display: flex;
+  align-items: center;
 }
 
+/* Glassmorphism badge from your file */
 .ai-status-badge {
-    display: flex;
-    align-items: center;
-    gap: var(--space-8);
-    background: rgba(255, 255, 255, 0.15);
-    padding: var(--space-8) var(--space-16);
-    border-radius: var(--radius-full);
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  background: rgba(255, 255, 255, 0.15);
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .ai-status-badge i {
-    color: var(--color-btn-primary-text);
+  color: var(--color-btn-primary-text);
 }
 
+/* Description and badges section */
 .header-description {
-    text-align: center;
-    position: relative;
-    z-index: 1;
+  text-align: center;
+  position: relative;
+  z-index: 1;
 }
 
 .header-description p {
-    font-size: var(--font-size-lg);
-    margin: 0 0 var(--space-16) 0;
-    opacity: 0.9;
+  font-size: var(--font-size-lg);
+  margin: 0 0 var(--space-16) 0;
+  opacity: 0.9;
 }
 
 .features-badges {
-    display: flex;
-    justify-content: center;
-    gap: var(--space-12);
-    flex-wrap: wrap;
+  display: flex;
+  justify-content: center;
+  gap: var(--space-12);
+  flex-wrap: wrap;
 }
 
 .feature-badge {
-    display: flex;
-    align-items: center;
-    gap: var(--space-6);
-    background: rgba(255, 255, 255, 0.1);
-    padding: var(--space-6) var(--space-12);
-    border-radius: var(--radius-full);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-medium);
-    backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  background: rgba(255, 255, 255, 0.1);
+  padding: var(--space-6) var(--space-12);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  backdrop-filter: blur(5px);
 }
 
-/* Enhanced Tab Buttons */
-.tab-btn {
-    display: flex;
-    align-items: center;
-    gap: var(--space-8);
-    font-weight: var(--font-weight-medium);
-    transition: all var(--duration-normal) var(--ease-standard);
-}
+/* --- RESPONSIVENESS --- */
+/* Ensures the header adapts to smaller screens */
+@media (max-width: 768px) {
+  .header {
+    padding: var(--space-16);
+  }
 
-.tab-btn i {
-    font-size: var(--font-size-md);
-}
-
-/* Enhanced Upload Area */
-.upload-area {
-    border: 3px dashed var(--color-border);
-    border-radius: var(--radius-lg);
-    padding: var(--space-32);
+  .header-content {
+    flex-direction: column;
     text-align: center;
-    cursor: pointer;
-    transition: all var(--duration-normal) var(--ease-standard);
-    background: linear-gradient(135deg, var(--color-bg-1) 0%, var(--color-bg-2) 100%);
-    position: relative;
-    overflow: hidden;
-}
+    gap: var(--space-16);
+  }
 
-.upload-area::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: radial-gradient(circle at 30% 20%, var(--color-bg-3) 0%, transparent 50%),
-                radial-gradient(circle at 70% 80%, var(--color-bg-4) 0%, transparent 50%);
-    opacity: 0.3;
-    transition: opacity var(--duration-normal);
-}
-
-.upload-area:hover::before {
-    opacity: 0.5;
-}
-
-.upload-content {
-    position: relative;
-    z-index: 1;
-}
-
-.upload-icon {
-    font-size: 4rem;
-    margin-bottom: var(--space-16);
-    color: var(--color-primary);
-    transition: transform var(--duration-normal);
-}
-
-.upload-area:hover .upload-icon {
-    transform: scale(1.1);
+  .logo-section {
+    justify-content: center;
+  }
 }
 
 /* Enhanced File Info Cards */
@@ -1845,4 +1827,65 @@ body {
         transform: translateX(100%);
         opacity: 0;
     }
+}
+
+/* ===== HEADER & NAVBAR ===== */
+.main-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  z-index: 1000;
+}
+
+.nav-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-12) var(--space-24);
+  max-width: var(--container-xl);
+  margin: 0 auto;
+}
+
+.nav-logo {
+  display: flex;
+  align-items: center;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-xl);
+  color: var(--color-primary);
+  gap: var(--space-8);
+}
+
+.navbar {
+  display: flex;
+  gap: var(--space-16);
+}
+
+.nav-link {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.nav-link:hover {
+  color: var(--color-primary);
+}
+
+.nav-link.active {
+  color: var(--color-primary);
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-primary);
+  padding-bottom: 2px;
+}
+
+.ai-status-mini {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  color: var(--color-success);
+  font-weight: 500;
 }
