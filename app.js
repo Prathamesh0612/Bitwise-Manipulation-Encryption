@@ -348,18 +348,33 @@ class NECrypto {
             aiUsed: false
         };
 
-        if (analysis.fileType.includes('image') || analysis.fileType.includes('video')) {
-            analysis.corruptionRatio = 0.005;
-        } else if (analysis.fileType.includes('text') || analysis.fileType.includes('code')) {
-            analysis.corruptionRatio = 0.002;
-        } else {
-            analysis.corruptionRatio = 0.003;
-        }
+        // Use a crypto-safe random float [0, 1] for randomization
+        // We get 4 random bytes and divide by the max possible 4-byte value
+        const randomVal = (this.generateRandomBytes(4).reduce((a, b) => a * 256 + b, 0)) / 0xFFFFFFFF;
 
-        analysis.partitionCount = Math.min(8, Math.max(2, Math.floor(analysis.entropy * 6) + 2));
-        analysis.bases = this.BASES.slice(0, Math.max(2, Math.floor(analysis.entropy * 4)));
+        // 1. Random Corruption Ratio (still influenced by entropy)
+        //    Base ratio: 0.001 (low entropy) to 0.008 (high entropy)
+        const baseRatio = this.MIN_CORRUPTION_RATIO + (analysis.entropy * 0.007);
+        //    Final ratio: Add randomness, but clamp to [MIN, MAX]
+        analysis.corruptionRatio = Math.max(this.MIN_CORRUPTION_RATIO, Math.min(this.MAX_CORRUPTION_RATIO,
+            baseRatio + (randomVal - 0.5) * 0.002 // Add/subtract up to 0.001
+        ));
+        
+        // 2. Random Partition Count
+        //    Use csprngInt to get a random int from 2 to 8
+        analysis.partitionCount = 2 + this.csprngInt(7); // 2 + (random 0-6) = 2 to 8
+
+        // 3. Random Bases
+        //    Randomly pick 2, 3, or 4 bases from the list
+        const numBases = 2 + this.csprngInt(3); // 2, 3, or 4
+        // Create a copy, shuffle it, and take the first numBases
+        const shuffledBases = [...this.BASES].sort(() => 0.5 - Math.random());
+        analysis.bases = shuffledBases.slice(0, numBases);
+
+        // --- END MODIFICATION ---
 
         return analysis;
+    }
     }
 
     calculateEntropy(bytes) {
