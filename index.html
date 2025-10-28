@@ -8,9 +8,13 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+
 </head>
 <body>
 <header class="main-header">
+<div id="mode-status" style="font-weight:bold; color:#00cc99;">Loading AI model...</div>
+
   <div class="nav-container">
     <div class="nav-logo">
       <i class="fas fa-shield-alt"></i>
@@ -207,7 +211,7 @@
                     <div class="download-section">
                         <button id="download-encrypted" class="btn btn--primary btn--lg btn--full-width">
                             <i class="fas fa-download"></i>
-                            Download Encrypted File
+                            Download Encrypted File (.nec)
                         </button>
                     </div>
                 </div>
@@ -217,10 +221,10 @@
             <div id="decrypt-tab" class="tab-content">
                 <div class="upload-section">
                     <div class="upload-area" id="decrypt-upload">
-                        <input type="file" id="decrypt-file" class="hidden" accept=".bme">
+                        <input type="file" id="decrypt-file" class="hidden" accept=".nec">
                         <div class="upload-content">
                             <i class="fas fa-file-import upload-icon"></i>
-                            <h3>Upload your encrypted .bme file</h3>
+                            <h3>Upload your encrypted .nec file</h3>
                             <p>Select the file you want to decrypt</p>
                         </div>
                     </div>
@@ -360,6 +364,7 @@
             </div>
         </footer>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
 
     <script src="app.js"></script>
 </body>
