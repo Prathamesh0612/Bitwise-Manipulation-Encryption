@@ -746,7 +746,8 @@ if (saveKeyBtn) {
             else this.showError('Hash verification failed - wrong key or corrupted file');
 
             this.restoredData = restored;
-            this.originalFileName = this.encryptedFile.name.replace(/\.nec$/i, '') || 'restored.bin';
+            this.originalFileName = this.encryptedFile.name.replace(/\.bme$/i, '') || 'restored.bin';
+
 
             // FIXED: Make download button visible and functional
             const dlBtn = document.getElementById('download-restored');
