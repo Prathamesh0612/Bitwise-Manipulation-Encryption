@@ -300,7 +300,115 @@ class NECrypto {
         return features;
     }
 
-    analyzeFile(data) {
+    async encryptFile() {
+        if (!this.currentFile) return;
+        const t0 = Date.now();
+        this.showProgress('encrypt', 0);
+        
+        try {
+            // --- DYNAMIC PARAMETER GENERATION ---
+            let corruptionRatio, partitionCount, bases;
+
+            if (this.fileAnalysis.aiUsed) {
+                // 1. Get parameters from the AI analysis
+                corruptionRatio = this.fileAnalysis.corruptionRatio;
+                partitionCount = this.fileAnalysis.partitionCount;
+                bases = this.fileAnalysis.bases;
+                
+            } else {
+                // 2. HEURISTIC: Generate NEW random parameters *every time*
+                
+                // Get a crypto-safe random float [0, 1]
+                const randomVal = (this.crypto.generateRandomBytes(4).reduce((a, b) => a * 256 + b, 0)) / 0xFFFFFFFF;
+                
+                // Generate a random corruption ratio
+                corruptionRatio = this.crypto.MIN_CORRUPTION_RATIO + (randomVal * (this.crypto.MAX_CORRUPTION_RATIO - this.crypto.MIN_CORRUPTION_RATIO));
+
+                // Generate a random partition count (2 to 8)
+                partitionCount = 2 + this.crypto.csprngInt(7); 
+
+                // Generate a random set of bases
+                const numBases = 2 + this.crypto.csprngInt(3); // 2, 3, or 4
+                const shuffledBases = [...this.crypto.BASES].sort(() => 0.5 - Math.random());
+                bases = shuffledBases.slice(0, numBases);
+                
+                // --- UPDATE UI to show what we generated ---
+                document.getElementById('encrypt-ratio').textContent = `${(corruptionRatio * 100).toFixed(3)}%`;
+                document.getElementById('encrypt-partitions').textContent = partitionCount;
+            }
+            // --- END DYNAMIC PARAMETER GENERATION ---
+
+
+            const salt = this.crypto.generateRandomBytes(32);
+            const seed = this.crypto.generateRandomBytes(32);
+            const keyString = this.crypto.generateKeyString();
+
+            const data = new Uint8Array(await this.currentFile.arrayBuffer());
+            const fileHash = await this.crypto.sha256(data);
+            document.getElementById('original-hash').textContent = fileHash;
+
+            const totalBits = data.length * 8;
+            
+            // --- USE THE NEW DYNAMIC VARIABLES ---
+            const partition = this.crypto.generateRandomPartition(
+                Math.floor(totalBits * corruptionRatio), // Use dynamic ratio
+                partitionCount,                          // Use dynamic count
+                partitionCount
+            );
+
+            this.showProgress('encrypt', 25);
+
+            const encryptedChunks = [];
+            const cs = this.crypto.CHUNK_SIZE;
+            for (let i = 0; i < data.length; i += cs) {
+                const chunk = data.slice(i, Math.min(i + cs, data.length));
+                const chunkId = Math.floor(i / cs);
+                const positions = await this.crypto.generateBitPositions(seed, fileHash, chunkId, partition, chunk.length * 8);
+                encryptedChunks.push(this.crypto.flipBits(chunk, positions));
+                this.showProgress('encrypt', 25 + (i / data.length) * 50);
+            }
+            
+            const encryptedData = new Uint8Array(data.length);
+            let off = 0;
+            for (const c of encryptedChunks) {
+                encryptedData.set(c, off);
+                off += c.length;
+            }
+
+            this.showProgress('encrypt', 75);
+            const encryptedHash = await this.crypto.sha256(encryptedData);
+            document.getElementById('encrypted-hash').textContent = encryptedHash;
+
+            // --- USE THE NEW DYNAMIC 'bases' VARIABLE ---
+            const headerString = await this.crypto.createCompactKey(
+                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed
+            );
+
+            const preface = `NECHDR\n${headerString}\nENDHDR\n`;
+            const prefaceBytes = new TextEncoder().encode(preface);
+            const finalData = new Uint8Array(prefaceBytes.length + encryptedData.length);
+            finalData.set(prefaceBytes, 0);
+            finalData.set(encryptedData, prefaceBytes.length);
+            this.encryptedData = finalData;
+
+            this.showProgress('encrypt', 100);
+
+            document.getElementById('encryption-key').value = keyString;
+            document.getElementById('encrypt-results').classList.remove('hidden');
+
+            const t1 = Date.now();
+            const thr = (data.length / ((t1 - t0) / 1000)) / (1024 * 1024);
+            document.getElementById('encrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
+            
+            const aiNote = this.fileAnalysis.aiUsed ? ' (AI-Enhanced)' : ' (Dynamic Heuristic)';
+            this.showSuccess(`File encrypted successfully${aiNote}! Save your key and the .nec file.`);
+        } catch (err) {
+            this.showError(`Encryption failed: ${err.message}`);
+        }
+    }
+
+        // Heuristic fallback
+        analyzeFile(data) {
         const bytes = new Uint8Array(data);
 
         if (typeof tf !== 'undefined' && necModel) {
@@ -337,44 +445,17 @@ class NECrypto {
             }
         }
 
-        // Heuristic fallback
+        // --- HEURISTIC FALLBACK ---
+        // We no longer generate ANY parameters here.
+        // We only return the basic file analysis.
         const analysis = {
             size: bytes.length,
             entropy: this.calculateEntropy(bytes.slice(0, Math.min(1024 * 1024, bytes.length))),
             fileType: this.detectFileType(bytes),
-            corruptionRatio: 0,
-            partitionCount: 0,
-            bases: [],
             aiUsed: false
         };
 
-        // Use a crypto-safe random float [0, 1] for randomization
-        // We get 4 random bytes and divide by the max possible 4-byte value
-        const randomVal = (this.generateRandomBytes(4).reduce((a, b) => a * 256 + b, 0)) / 0xFFFFFFFF;
-
-        // 1. Random Corruption Ratio (still influenced by entropy)
-        //    Base ratio: 0.001 (low entropy) to 0.008 (high entropy)
-        const baseRatio = this.MIN_CORRUPTION_RATIO + (analysis.entropy * 0.007);
-        //    Final ratio: Add randomness, but clamp to [MIN, MAX]
-        analysis.corruptionRatio = Math.max(this.MIN_CORRUPTION_RATIO, Math.min(this.MAX_CORRUPTION_RATIO,
-            baseRatio + (randomVal - 0.5) * 0.002 // Add/subtract up to 0.001
-        ));
-        
-        // 2. Random Partition Count
-        //    Use csprngInt to get a random int from 2 to 8
-        analysis.partitionCount = 2 + this.csprngInt(7); // 2 + (random 0-6) = 2 to 8
-
-        // 3. Random Bases
-        //    Randomly pick 2, 3, or 4 bases from the list
-        const numBases = 2 + this.csprngInt(3); // 2, 3, or 4
-        // Create a copy, shuffle it, and take the first numBases
-        const shuffledBases = [...this.BASES].sort(() => 0.5 - Math.random());
-        analysis.bases = shuffledBases.slice(0, numBases);
-
-        // --- END MODIFICATION ---
-
         return analysis;
-    }
     }
 
     calculateEntropy(bytes) {
@@ -560,7 +641,7 @@ if (saveKeyBtn) {
         }
     }
 
-    async analyzeFile(file) {
+   async analyzeFile(file) {
         const data = await file.arrayBuffer();
         const analysis = this.crypto.analyzeFile(data);
         
@@ -568,132 +649,29 @@ if (saveKeyBtn) {
         document.getElementById('encrypt-filesize').textContent = this.formatFileSize(file.size);
         document.getElementById('encrypt-filetype').textContent = analysis.fileType;
         document.getElementById('encrypt-entropy').textContent = analysis.entropy.toFixed(3);
-        document.getElementById('encrypt-ratio').textContent = `${(analysis.corruptionRatio * 100).toFixed(3)}%`;
-        document.getElementById('encrypt-partitions').textContent = analysis.partitionCount;
         
-        // Update AI status
-        const aiStatus = analysis.aiUsed ? '✓ AI Enhanced' : '⚠ Heuristic Mode';
+        let ratioText, partText, aiStatus;
+        
+        if (analysis.aiUsed) {
+            // If AI is active, we know the parameters
+            ratioText = `${(analysis.corruptionRatio * 100).toFixed(3)}%`;
+            partText = analysis.partitionCount;
+            aiStatus = '✓ AI Enhanced';
+        } else {
+            // If AI is NOT active (heuristic), parameters will be
+            // generated at the moment of encryption.
+            ratioText = 'Dynamic (on encrypt)';
+            partText = 'Dynamic (on encrypt)';
+            aiStatus = '⚠ Heuristic Mode';
+        }
+
+        document.getElementById('encrypt-ratio').textContent = ratioText;
+        document.getElementById('encrypt-partitions').textContent = partText;
         updateAIStatus(aiStatus);
         
         document.getElementById('encrypt-info').classList.remove('hidden');
         this.fileAnalysis = analysis;
     }
-
-    showProgress(type, percent) {
-        const fill = document.getElementById(`${type}-progress-fill`);
-        const text = document.getElementById(`${type}-progress-text`);
-        const bar = document.getElementById(`${type}-progress`);
-        bar.classList.remove('hidden');
-        fill.style.width = `${percent}%`;
-        text.textContent = `${Math.round(percent)}%`;
-    }
-
-    showError(message) { this.showMessage(message, 'error'); }
-    showSuccess(message) { this.showMessage(message, 'success'); }
-    
-    showMessage(message, type) {
-        document.querySelectorAll('.error-message, .success-message').forEach(el => el.remove());
-        const div = document.createElement('div');
-        div.className = `${type}-message fade-in`;
-        div.textContent = message;
-        div.style.cssText = `
-            padding: 12px; margin: 12px 0; border-radius: 6px; font-size: 14px;
-            background: rgba(${type === 'error' ? '192, 21, 47' : '33, 128, 141'}, 0.1);
-            border: 1px solid rgba(${type === 'error' ? '192, 21, 47' : '33, 128, 141'}, 0.3);
-            color: var(--color-${type === 'error' ? 'error' : 'success'});
-        `;
-        const active = document.querySelector('.tab-content.active');
-        active.insertBefore(div, active.firstChild);
-        setTimeout(() => { if (div.parentNode) div.parentNode.removeChild(div); }, 5000);
-    }
-
-    async copyToClipboard(elementId) {
-        const el = document.getElementById(elementId);
-        const btn = document.querySelector(`[data-copy="${elementId}"]`);
-        try {
-            await navigator.clipboard.writeText(el.value);
-            const orig = btn.textContent;
-            btn.textContent = 'Copied!';
-            setTimeout(() => btn.textContent = orig, 2000);
-        } catch {
-            el.select();
-            document.execCommand('copy');
-            const orig = btn.textContent;
-            btn.textContent = 'Copied!';
-            setTimeout(() => btn.textContent = orig, 2000);
-        }
-    }
-
-    async encryptFile() {
-        if (!this.currentFile) return;
-        const t0 = Date.now();
-        this.showProgress('encrypt', 0);
-        
-        try {
-            const salt = this.crypto.generateRandomBytes(32);
-            const seed = this.crypto.generateRandomBytes(32);
-            const keyString = this.crypto.generateKeyString();
-
-            const data = new Uint8Array(await this.currentFile.arrayBuffer());
-            const fileHash = await this.crypto.sha256(data);
-            document.getElementById('original-hash').textContent = fileHash;
-
-            const totalBits = data.length * 8;
-            const partition = this.crypto.generateRandomPartition(
-                Math.floor(totalBits * this.fileAnalysis.corruptionRatio), 2, 8
-            );
-            const bases = this.fileAnalysis.bases;
-
-            this.showProgress('encrypt', 25);
-
-            const encryptedChunks = [];
-            const cs = this.crypto.CHUNK_SIZE;
-            for (let i = 0; i < data.length; i += cs) {
-                const chunk = data.slice(i, Math.min(i + cs, data.length));
-                const chunkId = Math.floor(i / cs);
-                const positions = await this.crypto.generateBitPositions(seed, fileHash, chunkId, partition, chunk.length * 8);
-                encryptedChunks.push(this.crypto.flipBits(chunk, positions));
-                this.showProgress('encrypt', 25 + (i / data.length) * 50);
-            }
-            
-            const encryptedData = new Uint8Array(data.length);
-            let off = 0;
-            for (const c of encryptedChunks) {
-                encryptedData.set(c, off);
-                off += c.length;
-            }
-
-            this.showProgress('encrypt', 75);
-            const encryptedHash = await this.crypto.sha256(encryptedData);
-            document.getElementById('encrypted-hash').textContent = encryptedHash;
-
-            const headerString = await this.crypto.createCompactKey(
-                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed
-            );
-
-            const preface = `NECHDR\n${headerString}\nENDHDR\n`;
-            const prefaceBytes = new TextEncoder().encode(preface);
-            const finalData = new Uint8Array(prefaceBytes.length + encryptedData.length);
-            finalData.set(prefaceBytes, 0);
-            finalData.set(encryptedData, prefaceBytes.length);
-            this.encryptedData = finalData;
-
-            this.showProgress('encrypt', 100);
-
-            document.getElementById('encryption-key').value = keyString;
-            document.getElementById('encrypt-results').classList.remove('hidden');
-
-            const t1 = Date.now();
-            const thr = (data.length / ((t1 - t0) / 1000)) / (1024 * 1024);
-            document.getElementById('encrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
-            
-            const aiNote = this.fileAnalysis.aiUsed ? ' (AI-Enhanced)' : ' (Heuristic Mode)';
-            this.showSuccess(`File encrypted successfully${aiNote}! Save your key and the .nec file.`);
-        } catch (err) {
-            this.showError(`Encryption failed: ${err.message}`);
-        }
-    }
-
     async decryptFile() {
         if (!this.encryptedFile) return;
         const keyString = document.getElementById('decrypt-key').value.trim();
