@@ -5,14 +5,14 @@ let necModel = null;
 // Load NEC AI model
 async function loadNECModel() {
     try {
-        necModel = await tf.loadLayersModel('./');
+        necModel = await tf.loadLayersModel('./'); // User's path
         console.log('✓ NEC AI model loaded successfully');
         updateAIStatus('✓ AI Model Active');
         return true;
     } catch (e) {
         console.log('⚠ NEC AI model not found, using heuristic fallback');
         necModel = null;
-        updateAIStatus('100% Safe');
+        updateAIStatus('100% Safe'); // User's status
         return false;
     }
 }
@@ -25,9 +25,18 @@ function updateAIStatus(status) {
 // Initialize app after model loading
 document.addEventListener('DOMContentLoaded', async () => {
     await loadNECModel();
+    // This line updates the status in the header after loading
+    const statusEl = document.getElementById('mode-status'); 
+    if (statusEl) {
+        statusEl.textContent = necModel ? 'AI Model Active' : 'Heuristic Mode Active';
+        statusEl.style.color = necModel ? '#00cc99' : '#ff9900';
+    }
     new NECApp();
 });
 
+// -----------------------------------------------------------------
+// CLASS 1: NECrypto (The crypto logic)
+// -----------------------------------------------------------------
 class NECrypto {
     constructor() {
         this.VERSION = 1;
@@ -147,15 +156,27 @@ class NECrypto {
     }
 
     generateRandomPartition(n, minParts = 2, maxParts = 8) {
+        // Ensure n is a number and non-negative
+        n = Math.max(0, Number(n) || 0);
+        
+        // Ensure parts is at least minParts, even if n is very small
         const parts = Math.min(maxParts, Math.max(minParts, Math.min(n, 8)));
+        
+        // Handle n=0 case: return an array of 'parts' count, with zeros
+        if (n === 0) {
+            return new Array(parts).fill(0);
+        }
+
         const partition = new Array(parts).fill(1);
         let remaining = Math.max(0, n - parts);
+        
         while (remaining > 0) {
             const idx = this.csprngInt(parts);
             const add = Math.min(remaining, 1 + this.csprngInt(10));
             partition[idx] += add;
             remaining -= add;
         }
+        
         for (let i = partition.length - 1; i > 0; i--) {
             const j = this.csprngInt(i + 1);
             [partition[i], partition[j]] = [partition[j], partition[i]];
@@ -176,14 +197,18 @@ class NECrypto {
                 (partId >> 24) & 0xff, (partId >> 16) & 0xff, (partId >> 8) & 0xff, partId & 0xff
             ]), 36);
 
-            const stream = await this.generatePRFStream(seed, context, partition[partId] * 4 + 16);
+            // Use the number of bits to flip from the partition plan
+            const numPositions = partition[partId]; 
+            if (numPositions === 0) continue; // Skip if this partition has 0 bits
+
+            const stream = await this.generatePRFStream(seed, context, numPositions * 4 + 16);
             const positions = new Set();
-            for (let i = 0; i + 3 < stream.length && positions.size < partition[partId]; i += 4) {
+            for (let i = 0; i + 3 < stream.length && positions.size < numPositions; i += 4) {
                 const value = (stream[i] << 24) | (stream[i + 1] << 16) | (stream[i + 2] << 8) | stream[i + 3];
                 const pos = Math.abs(value) % totalBits;
                 positions.add(pos);
             }
-            while (positions.size < partition[partId]) {
+            while (positions.size < numPositions) {
                 const rb = this.generateRandomBytes(4);
                 const value = (rb[0] << 24) | (rb[1] << 16) | (rb[2] << 8) | rb[3];
                 positions.add(Math.abs(value) % totalBits);
@@ -301,7 +326,7 @@ class NECrypto {
     }
 
     
-    // Heuristic fallback
+    // This is the single, correct analyzeFile function
     analyzeFile(data) {
         const bytes = new Uint8Array(data);
 
@@ -379,6 +404,10 @@ class NECrypto {
     generateTestData(size = 1024 * 1024) { return this.generateRandomBytes(size); }
 }
 
+
+// -----------------------------------------------------------------
+// CLASS 2: NECApp (The UI controller)
+// -----------------------------------------------------------------
 class NECApp {
     constructor() {
         this.crypto = new NECrypto();
@@ -390,78 +419,74 @@ class NECApp {
     }
 
     initializeUI() {
-      // Screenshot button functionality
-const screenshotBtn = document.getElementById('take-screenshot');
-if (screenshotBtn) {
-    screenshotBtn.addEventListener('click', async () => {
-        try {
-            const element = document.getElementById('encrypt-results');
-            if (!element) {
-                alert('No encryption results to capture');
-                return;
-            }
-            const canvas = await html2canvas(element, { scale: 2 });
-            canvas.toBlob(blob => {
+        // Screenshot button functionality
+        const screenshotBtn = document.getElementById('take-screenshot');
+        if (screenshotBtn) {
+            screenshotBtn.addEventListener('click', async () => {
+                try {
+                    const element = document.getElementById('encrypt-results');
+                    if (!element) {
+                        alert('No encryption results to capture');
+                        return;
+                    }
+                    const canvas = await html2canvas(element, { scale: 2 });
+                    canvas.toBlob(blob => {
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `NecEncryptionResults_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                    });
+                } catch (e) {
+                    alert('Screenshot failed: ' + e.message);
+                }
+            });
+        }
+
+        // Copy Key button functionality
+        const copyKeyBtn = document.querySelector('.copy-btn[data-target="encryption-key"]');
+        if (copyKeyBtn) {
+            copyKeyBtn.addEventListener('click', (e) => {
+                 // Use currentTarget to ensure we get the button that was clicked
+                 const targetId = e.currentTarget.dataset.target;
+                 if(targetId) this.copyToClipboard(targetId);
+            });
+        }
+
+        // Save Key as TXT button functionality
+        const saveKeyBtn = document.getElementById('save-key-txt');
+        if (saveKeyBtn) {
+            saveKeyBtn.addEventListener('click', () => {
+                const keyArea = document.getElementById('encryption-key');
+                if (!keyArea || !keyArea.value) {
+                    alert('No encryption key to save');
+                    return;
+                }
+                const blob = new Blob([keyArea.value], { type: 'text/plain' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
-                a.download = `NecEncryptionResults_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                a.download = 'NEC_Encryption_Key_' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.txt';
                 a.click();
                 URL.revokeObjectURL(a.href);
             });
-        } catch (e) {
-            alert('Screenshot failed: ' + e.message);
         }
-    });
-}
 
-// Copy Key button functionality
-const copyKeyBtn = document.querySelector('.copy-btn[data-target="encryption-key"]');
-if (copyKeyBtn) {
-    copyKeyBtn.addEventListener('click', () => {
-        const keyArea = document.getElementById('encryption-key');
-        if (!keyArea) return;
-        keyArea.select();
-        document.execCommand('copy');
-        copyKeyBtn.textContent = 'Copied!';
-        setTimeout(() => {
-            copyKeyBtn.innerHTML = '<i class="fas fa-copy"></i> Copy';
-        }, 3000);
-    });
-}
-
-// Save Key as TXT button functionality
-const saveKeyBtn = document.getElementById('save-key-txt');
-if (saveKeyBtn) {
-    saveKeyBtn.addEventListener('click', () => {
-        const keyArea = document.getElementById('encryption-key');
-        if (!keyArea || !keyArea.value) {
-            alert('No encryption key to save');
-            return;
-        }
-        const blob = new Blob([keyArea.value], { type: 'text/plain' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'NEC_Encryption_Key_' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.txt';
-        a.click();
-        URL.revokeObjectURL(a.href);
-    });
-}
-
-        document.querySelectorAll('.tab-btn').forEach(btn => 
+        document.querySelectorAll('.tab-btn').forEach(btn =>
             btn.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab))
         );
         this.setupFileUpload('encrypt');
         this.setupFileUpload('decrypt');
+        
+        // --- THIS IS THE CRITICAL LINE THAT MAKES THE BUTTON WORK ---
         document.getElementById('start-encrypt').addEventListener('click', () => this.encryptFile());
+        
         document.getElementById('start-decrypt').addEventListener('click', () => this.decryptFile());
         document.getElementById('run-self-test').addEventListener('click', () => this.runSelfTest());
-        document.querySelectorAll('.copy-btn').forEach(btn => 
-            btn.addEventListener('click', (e) => this.copyToClipboard(e.target.dataset.copy))
+                
+        document.getElementById('download-encrypted').addEventListener('click', () =>
+            this.downloadFile(this.encryptedData, `${this.currentFile?.name || 'encrypted'}.nec`) // Fixed .bme to .nec
         );
-        document.getElementById('download-encrypted').addEventListener('click', () => 
-            this.downloadFile(this.encryptedData, `${this.currentFile?.name || 'encrypted'}.bme`)
-        );
-        document.getElementById('download-restored').addEventListener('click', () => 
+        document.getElementById('download-restored').addEventListener('click', () =>
             this.downloadFile(this.restoredData, this.originalFileName || 'restored.bin')
         );
         this.createDemoFileButton();
@@ -469,6 +494,7 @@ if (saveKeyBtn) {
 
     createDemoFileButton() {
         const uploadArea = document.getElementById('encrypt-upload');
+        if (!uploadArea) return; // Add check in case element doesn't exist
         const demoButton = document.createElement('button');
         demoButton.className = 'btn btn--outline demo-btn';
         demoButton.textContent = 'Use Demo File (1KB Text)';
@@ -482,10 +508,10 @@ if (saveKeyBtn) {
     }
 
     switchTab(tab) {
-        document.querySelectorAll('.tab-btn').forEach(btn => 
+        document.querySelectorAll('.tab-btn').forEach(btn =>
             btn.classList.toggle('active', btn.dataset.tab === tab)
         );
-        document.querySelectorAll('.tab-content').forEach(c => 
+        document.querySelectorAll('.tab-content').forEach(c =>
             c.classList.toggle('active', c.id === `${tab}-tab`)
         );
     }
@@ -493,24 +519,25 @@ if (saveKeyBtn) {
     setupFileUpload(type) {
         const area = document.getElementById(`${type}-upload`);
         const input = document.getElementById(`${type}-file`);
-        
-        area.addEventListener('click', (e) => { 
-            if (e.target.tagName !== 'BUTTON') input.click(); 
+        if (!area || !input) return; // Add checks
+
+        area.addEventListener('click', (e) => {
+            if (e.target.tagName !== 'BUTTON') input.click();
         });
-        area.addEventListener('dragover', (e) => { 
-            e.preventDefault(); area.classList.add('dragover'); 
+        area.addEventListener('dragover', (e) => {
+            e.preventDefault(); area.classList.add('dragover');
+});
+        area.addEventListener('dragleave', (e) => {
+            e.preventDefault(); area.classList.remove('dragover');
         });
-        area.addEventListener('dragleave', (e) => { 
-            e.preventDefault(); area.classList.remove('dragover'); 
+        area.addEventListener('drop', (e) => {
+            e.preventDefault();
+            area.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length) this.handleFileSelect(files[0], type);
         });
-        area.addEventListener('drop', (e) => { 
-            e.preventDefault(); 
-            area.classList.remove('dragover'); 
-            const files = e.dataTransfer.files; 
-            if (files.length) this.handleFileSelect(files[0], type); 
-        });
-        input.addEventListener('change', (e) => { 
-            if (e.target.files && e.target.files.length) this.handleFileSelect(e.target.files[0], type); 
+        input.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length) this.handleFileSelect(e.target.files[0], type);
         });
     }
 
@@ -519,7 +546,7 @@ if (saveKeyBtn) {
             this.showError(`File too large. Maximum size is ${this.crypto.MAX_FILE_SIZE / (1024 * 1024)} MB`);
             return;
         }
-        
+
         try {
             if (type === 'encrypt') {
                 this.currentFile = file;
@@ -535,17 +562,17 @@ if (saveKeyBtn) {
         }
     }
 
-   async analyzeFile(file) {
+    async analyzeFile(file) {
         const data = await file.arrayBuffer();
         const analysis = this.crypto.analyzeFile(data);
-        
+
         document.getElementById('encrypt-filename').textContent = file.name;
         document.getElementById('encrypt-filesize').textContent = this.formatFileSize(file.size);
         document.getElementById('encrypt-filetype').textContent = analysis.fileType;
         document.getElementById('encrypt-entropy').textContent = analysis.entropy.toFixed(3);
-        
+
         let ratioText, partText, aiStatus;
-        
+
         if (analysis.aiUsed) {
             // If AI is active, we know the parameters
             ratioText = `${(analysis.corruptionRatio * 100).toFixed(3)}%`;
@@ -562,12 +589,17 @@ if (saveKeyBtn) {
         document.getElementById('encrypt-ratio').textContent = ratioText;
         document.getElementById('encrypt-partitions').textContent = partText;
         updateAIStatus(aiStatus);
-        
+
         document.getElementById('encrypt-info').classList.remove('hidden');
         this.fileAnalysis = analysis;
     }
+
+    // --- THIS IS THE encryptFile FUNCTION IN THE CORRECT CLASS ---
     async encryptFile() {
-        if (!this.currentFile) return;
+        if (!this.currentFile) {
+             this.showError('No file selected for encryption.');
+             return;
+        }
         const t0 = Date.now();
         this.showProgress('encrypt', 0);
         
@@ -663,17 +695,24 @@ if (saveKeyBtn) {
             document.getElementById('encrypt-results').classList.remove('hidden');
 
             const t1 = Date.now();
-            const thr = (data.length / ((t1 - t0) / 1000)) / (1024 * 1024);
+            const thr = (data.length / ((t1 - t0) || 1) / 1000) / (1024 * 1024); // Avoid divide by zero
             document.getElementById('encrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
             
             const aiNote = this.fileAnalysis.aiUsed ? ' (AI-Enhanced)' : ' (Dynamic Heuristic)';
             this.showSuccess(`File encrypted successfully${aiNote}! Save your key and the .nec file.`);
         } catch (err) {
             this.showError(`Encryption failed: ${err.message}`);
+            // Hide progress bar on failure
+            document.getElementById('encrypt-progress').classList.add('hidden');
         }
     }
+    // --- END OF encryptFile FUNCTION ---
+
     async decryptFile() {
-        if (!this.encryptedFile) return;
+        if (!this.encryptedFile) {
+            this.showError('No file selected for decryption.');
+            return;
+        }
         const keyString = document.getElementById('decrypt-key').value.trim();
         if (!keyString) {
             this.showError('Please provide the encryption key');
@@ -739,7 +778,7 @@ if (saveKeyBtn) {
             else this.showError('Hash verification failed - wrong key or corrupted file');
 
             this.restoredData = restored;
-            this.originalFileName = this.encryptedFile.name.replace(/\.bme$/i, '') || 'restored.bin';
+            this.originalFileName = this.encryptedFile.name.replace(/\.nec$/i, '') || 'restored.bin'; // Fixed .bme to .nec
 
 
             // FIXED: Make download button visible and functional
@@ -762,10 +801,12 @@ if (saveKeyBtn) {
             }
 
             const t1 = Date.now();
-            const thr = (restored.length / ((t1 - t0) / 1000)) / (1024 * 1024);
+            const thr = (restored.length / ((t1 - t0) || 1) / 1000) / (1024 * 1024); // Avoid divide by zero
             document.getElementById('decrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
         } catch (err) {
             this.showError(`Decryption failed: ${err.message}`);
+            // Hide progress bar on failure
+            document.getElementById('decrypt-progress').classList.add('hidden');
         }
     }
 
@@ -773,6 +814,8 @@ if (saveKeyBtn) {
         const resultsDiv = document.getElementById('self-test-results');
         const statusDiv = resultsDiv.querySelector('.test-status');
         const detailsDiv = resultsDiv.querySelector('.test-details');
+        if (!resultsDiv || !statusDiv || !detailsDiv) return; // Add checks
+        
         resultsDiv.classList.remove('hidden');
         statusDiv.textContent = 'Running self-test...';
         statusDiv.className = 'test-status pulse';
@@ -841,6 +884,65 @@ if (saveKeyBtn) {
             statusDiv.style.color = 'var(--color-error)';
             detailsDiv.textContent = `Error: ${err.message}`;
             this.showError(`Self-test error: ${err.message}`);
+        }
+    }
+    
+    // --- UTILITY FUNCTIONS ---
+    
+    showProgress(type, percent) {
+        const fill = document.getElementById(`${type}-progress-fill`);
+        const text = document.getElementById(`${type}-progress-text`);
+        const bar = document.getElementById(`${type}-progress`);
+        if (!fill || !text || !bar) return; // Add checks
+        bar.classList.remove('hidden');
+        fill.style.width = `${percent}%`;
+        text.textContent = `${Math.round(percent)}%`;
+    }
+
+    showError(message) { this.showMessage(message, 'error'); }
+    showSuccess(message) { this.showMessage(message, 'success'); }
+    
+    showMessage(message, type) {
+        document.querySelectorAll('.error-message, .success-message').forEach(el => el.remove());
+        const div = document.createElement('div');
+        div.className = `${type}-message fade-in`;
+        div.textContent = message;
+        div.style.cssText = `
+            padding: 12px; margin: 12px 0; border-radius: 6px; font-size: 14px;
+            background: rgba(${type === 'error' ? '192, 21, 47' : '33, 128, 141'}, 0.1);
+            border: 1px solid rgba(${type === 'error' ? '192, 21, 47' : '33, 128, 141'}, 0.3);
+            color: var(--color-${type === 'error' ? 'error' : 'success'});
+        `;
+        const active = document.querySelector('.tab-content.active');
+        if (active) {
+            active.insertBefore(div, active.firstChild);
+        }
+        setTimeout(() => { if (div.parentNode) div.parentNode.removeChild(div); }, 5000);
+    }
+    
+    async copyToClipboard(elementId) {
+        const el = document.getElementById(elementId);
+        const btn = document.querySelector(`[data-target="${elementId}"]`);
+        if (!el) {
+            console.error('No element to copy from with ID:', elementId);
+            return;
+        }
+        if (!btn) {
+            console.error('No copy button found for target:', elementId);
+            return;
+        }
+        
+        try {
+            await navigator.clipboard.writeText(el.value);
+            const orig = btn.innerHTML; // Store the icon + text
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.innerHTML = orig, 2000);
+        } catch {
+            el.select();
+            document.execCommand('copy');
+            const orig = btn.innerHTML;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.innerHTML = orig, 2000);
         }
     }
 
