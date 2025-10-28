@@ -300,9 +300,9 @@ class NECrypto {
         return features;
     }
 
-   
-        // Heuristic fallback
-        analyzeFile(data) {
+    
+    // Heuristic fallback
+    analyzeFile(data) {
         const bytes = new Uint8Array(data);
 
         if (typeof tf !== 'undefined' && necModel) {
