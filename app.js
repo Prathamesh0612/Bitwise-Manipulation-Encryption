@@ -300,113 +300,7 @@ class NECrypto {
         return features;
     }
 
-    async encryptFile() {
-        if (!this.currentFile) return;
-        const t0 = Date.now();
-        this.showProgress('encrypt', 0);
-        
-        try {
-            // --- DYNAMIC PARAMETER GENERATION ---
-            let corruptionRatio, partitionCount, bases;
-
-            if (this.fileAnalysis.aiUsed) {
-                // 1. Get parameters from the AI analysis
-                corruptionRatio = this.fileAnalysis.corruptionRatio;
-                partitionCount = this.fileAnalysis.partitionCount;
-                bases = this.fileAnalysis.bases;
-                
-            } else {
-                // 2. HEURISTIC: Generate NEW random parameters *every time*
-                
-                // Get a crypto-safe random float [0, 1]
-                const randomVal = (this.crypto.generateRandomBytes(4).reduce((a, b) => a * 256 + b, 0)) / 0xFFFFFFFF;
-                
-                // Generate a random corruption ratio
-                corruptionRatio = this.crypto.MIN_CORRUPTION_RATIO + (randomVal * (this.crypto.MAX_CORRUPTION_RATIO - this.crypto.MIN_CORRUPTION_RATIO));
-
-                // Generate a random partition count (2 to 8)
-                partitionCount = 2 + this.crypto.csprngInt(7); 
-
-                // Generate a random set of bases
-                const numBases = 2 + this.crypto.csprngInt(3); // 2, 3, or 4
-                const shuffledBases = [...this.crypto.BASES].sort(() => 0.5 - Math.random());
-                bases = shuffledBases.slice(0, numBases);
-                
-                // --- UPDATE UI to show what we generated ---
-                document.getElementById('encrypt-ratio').textContent = `${(corruptionRatio * 100).toFixed(3)}%`;
-                document.getElementById('encrypt-partitions').textContent = partitionCount;
-            }
-            // --- END DYNAMIC PARAMETER GENERATION ---
-
-
-            const salt = this.crypto.generateRandomBytes(32);
-            const seed = this.crypto.generateRandomBytes(32);
-            const keyString = this.crypto.generateKeyString();
-
-            const data = new Uint8Array(await this.currentFile.arrayBuffer());
-            const fileHash = await this.crypto.sha256(data);
-            document.getElementById('original-hash').textContent = fileHash;
-
-            const totalBits = data.length * 8;
-            
-            // --- USE THE NEW DYNAMIC VARIABLES ---
-            const partition = this.crypto.generateRandomPartition(
-                Math.floor(totalBits * corruptionRatio), // Use dynamic ratio
-                partitionCount,                          // Use dynamic count
-                partitionCount
-            );
-
-            this.showProgress('encrypt', 25);
-
-            const encryptedChunks = [];
-            const cs = this.crypto.CHUNK_SIZE;
-            for (let i = 0; i < data.length; i += cs) {
-                const chunk = data.slice(i, Math.min(i + cs, data.length));
-                const chunkId = Math.floor(i / cs);
-                const positions = await this.crypto.generateBitPositions(seed, fileHash, chunkId, partition, chunk.length * 8);
-                encryptedChunks.push(this.crypto.flipBits(chunk, positions));
-                this.showProgress('encrypt', 25 + (i / data.length) * 50);
-            }
-            
-            const encryptedData = new Uint8Array(data.length);
-            let off = 0;
-            for (const c of encryptedChunks) {
-                encryptedData.set(c, off);
-                off += c.length;
-            }
-
-            this.showProgress('encrypt', 75);
-            const encryptedHash = await this.crypto.sha256(encryptedData);
-            document.getElementById('encrypted-hash').textContent = encryptedHash;
-
-            // --- USE THE NEW DYNAMIC 'bases' VARIABLE ---
-            const headerString = await this.crypto.createCompactKey(
-                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed
-            );
-
-            const preface = `NECHDR\n${headerString}\nENDHDR\n`;
-            const prefaceBytes = new TextEncoder().encode(preface);
-            const finalData = new Uint8Array(prefaceBytes.length + encryptedData.length);
-            finalData.set(prefaceBytes, 0);
-            finalData.set(encryptedData, prefaceBytes.length);
-            this.encryptedData = finalData;
-
-            this.showProgress('encrypt', 100);
-
-            document.getElementById('encryption-key').value = keyString;
-            document.getElementById('encrypt-results').classList.remove('hidden');
-
-            const t1 = Date.now();
-            const thr = (data.length / ((t1 - t0) / 1000)) / (1024 * 1024);
-            document.getElementById('encrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
-            
-            const aiNote = this.fileAnalysis.aiUsed ? ' (AI-Enhanced)' : ' (Dynamic Heuristic)';
-            this.showSuccess(`File encrypted successfully${aiNote}! Save your key and the .nec file.`);
-        } catch (err) {
-            this.showError(`Encryption failed: ${err.message}`);
-        }
-    }
-
+   
         // Heuristic fallback
         analyzeFile(data) {
         const bytes = new Uint8Array(data);
@@ -671,6 +565,112 @@ if (saveKeyBtn) {
         
         document.getElementById('encrypt-info').classList.remove('hidden');
         this.fileAnalysis = analysis;
+    }
+    async encryptFile() {
+        if (!this.currentFile) return;
+        const t0 = Date.now();
+        this.showProgress('encrypt', 0);
+        
+        try {
+            // --- DYNAMIC PARAMETER GENERATION ---
+            let corruptionRatio, partitionCount, bases;
+
+            if (this.fileAnalysis.aiUsed) {
+                // 1. Get parameters from the AI analysis
+                corruptionRatio = this.fileAnalysis.corruptionRatio;
+                partitionCount = this.fileAnalysis.partitionCount;
+                bases = this.fileAnalysis.bases;
+                
+            } else {
+                // 2. HEURISTIC: Generate NEW random parameters *every time*
+                
+                // Get a crypto-safe random float [0, 1]
+                const randomVal = (this.crypto.generateRandomBytes(4).reduce((a, b) => a * 256 + b, 0)) / 0xFFFFFFFF;
+                
+                // Generate a random corruption ratio
+                corruptionRatio = this.crypto.MIN_CORRUPTION_RATIO + (randomVal * (this.crypto.MAX_CORRUPTION_RATIO - this.crypto.MIN_CORRUPTION_RATIO));
+
+                // Generate a random partition count (2 to 8)
+                partitionCount = 2 + this.crypto.csprngInt(7); 
+
+                // Generate a random set of bases
+                const numBases = 2 + this.crypto.csprngInt(3); // 2, 3, or 4
+                const shuffledBases = [...this.crypto.BASES].sort(() => 0.5 - Math.random());
+                bases = shuffledBases.slice(0, numBases);
+                
+                // --- UPDATE UI to show what we generated ---
+                document.getElementById('encrypt-ratio').textContent = `${(corruptionRatio * 100).toFixed(3)}%`;
+                document.getElementById('encrypt-partitions').textContent = partitionCount;
+            }
+            // --- END DYNAMIC PARAMETER GENERATION ---
+
+
+            const salt = this.crypto.generateRandomBytes(32);
+            const seed = this.crypto.generateRandomBytes(32);
+            const keyString = this.crypto.generateKeyString();
+
+            const data = new Uint8Array(await this.currentFile.arrayBuffer());
+            const fileHash = await this.crypto.sha256(data);
+            document.getElementById('original-hash').textContent = fileHash;
+
+            const totalBits = data.length * 8;
+            
+            // --- USE THE NEW DYNAMIC VARIABLES ---
+            const partition = this.crypto.generateRandomPartition(
+                Math.floor(totalBits * corruptionRatio), // Use dynamic ratio
+                partitionCount,                          // Use dynamic count
+                partitionCount
+            );
+
+            this.showProgress('encrypt', 25);
+
+            const encryptedChunks = [];
+            const cs = this.crypto.CHUNK_SIZE;
+            for (let i = 0; i < data.length; i += cs) {
+                const chunk = data.slice(i, Math.min(i + cs, data.length));
+                const chunkId = Math.floor(i / cs);
+                const positions = await this.crypto.generateBitPositions(seed, fileHash, chunkId, partition, chunk.length * 8);
+                encryptedChunks.push(this.crypto.flipBits(chunk, positions));
+                this.showProgress('encrypt', 25 + (i / data.length) * 50);
+            }
+            
+            const encryptedData = new Uint8Array(data.length);
+            let off = 0;
+            for (const c of encryptedChunks) {
+                encryptedData.set(c, off);
+                off += c.length;
+            }
+
+            this.showProgress('encrypt', 75);
+            const encryptedHash = await this.crypto.sha256(encryptedData);
+            document.getElementById('encrypted-hash').textContent = encryptedHash;
+
+            // --- USE THE NEW DYNAMIC 'bases' VARIABLE ---
+            const headerString = await this.crypto.createCompactKey(
+                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed
+            );
+
+            const preface = `NECHDR\n${headerString}\nENDHDR\n`;
+            const prefaceBytes = new TextEncoder().encode(preface);
+            const finalData = new Uint8Array(prefaceBytes.length + encryptedData.length);
+            finalData.set(prefaceBytes, 0);
+            finalData.set(encryptedData, prefaceBytes.length);
+            this.encryptedData = finalData;
+
+            this.showProgress('encrypt', 100);
+
+            document.getElementById('encryption-key').value = keyString;
+            document.getElementById('encrypt-results').classList.remove('hidden');
+
+            const t1 = Date.now();
+            const thr = (data.length / ((t1 - t0) / 1000)) / (1024 * 1024);
+            document.getElementById('encrypt-throughput').textContent = `${thr.toFixed(1)} MB/s`;
+            
+            const aiNote = this.fileAnalysis.aiUsed ? ' (AI-Enhanced)' : ' (Dynamic Heuristic)';
+            this.showSuccess(`File encrypted successfully${aiNote}! Save your key and the .nec file.`);
+        } catch (err) {
+            this.showError(`Encryption failed: ${err.message}`);
+        }
     }
     async decryptFile() {
         if (!this.encryptedFile) return;
