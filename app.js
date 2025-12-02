@@ -34,16 +34,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     new NECApp();
 });
 
-// -----------------------------------------------------------------
-// CLASS 1: NECrypto (The crypto logic)
-// -----------------------------------------------------------------
+
 class NECrypto {
     constructor() {
+        // legacy defaults (some values may be replaced elsewhere)
         this.VERSION = 1;
         this.KDF_ITERATIONS = 150000;
         this.SALT_SIZE = 32;
         this.SEED_SIZE = 32;
-        this.MAX_FILE_SIZE = 150 * 1024 * 1024;
+        this.MAX_FILE_SIZE = 200 * 1024 * 1024;
         this.CHUNK_SIZE = 10 * 1024 * 1024;
         this.BASES = [12, 16, 20, 36];
         this.MIN_CORRUPTION_RATIO = 0.001;
@@ -51,214 +50,25 @@ class NECrypto {
         this.MAX_CRYPTO_RANDOM_BYTES = 65536;
     }
 
-    generateRandomBytes(size) {
-        if (size <= this.MAX_CRYPTO_RANDOM_BYTES) {
-            const array = new Uint8Array(size);
-            crypto.getRandomValues(array);
-            return array;
-        }
-        const result = new Uint8Array(size);
-        let offset = 0;
-        while (offset < size) {
-            const chunkSize = Math.min(this.MAX_CRYPTO_RANDOM_BYTES, size - offset);
-            const chunk = new Uint8Array(chunkSize);
-            crypto.getRandomValues(chunk);
-            result.set(chunk, offset);
-            offset += chunkSize;
-        }
-        return result;
-    }
-
-    csprngInt(maxExclusive) {
-        if (maxExclusive <= 1) return 0;
-        const u32 = new Uint32Array(1);
-        const limit = Math.floor(0x100000000 / maxExclusive) * maxExclusive;
-        let x;
-        do { crypto.getRandomValues(u32); x = u32[0]; } while (x >= limit);
-        return x % maxExclusive;
-    }
-
-    generateKeyString() {
-        const keyBytes = this.generateRandomBytes(32);
-        return this.base85Encode(keyBytes);
-    }
-
-    bufferToHex(buffer) {
-        return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    hexToBuffer(hex) {
-        const bytes = new Uint8Array(hex.length / 2);
-        for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-        return bytes.buffer;
-    }
-
-    async sha256(data) {
-        const buffer = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-        return this.bufferToHex(hashBuffer);
-    }
-
-    async deriveKeysFromKeyString(keyString, salt, iterations = this.KDF_ITERATIONS) {
-        const keyStringBuffer = new TextEncoder().encode(keyString);
-        const saltBuffer = (salt instanceof Uint8Array) ? salt : new Uint8Array(salt);
-        const keyMaterial = await crypto.subtle.importKey('raw', keyStringBuffer, 'PBKDF2', false, ['deriveBits']);
-        const derivedBits = await crypto.subtle.deriveBits(
-            { name: 'PBKDF2', salt: saltBuffer, iterations, hash: 'SHA-256' },
-            keyMaterial,
-            512
-        );
-        const d = new Uint8Array(derivedBits);
-        return { masterKey: d.slice(0, 32), macKey: d.slice(32, 64) };
-    }
-
-    xorEncryptDecrypt(data, key) {
-        const result = new Uint8Array(data.length);
-        for (let i = 0; i < data.length; i++) result[i] = data[i] ^ key[i % key.length];
-        return result;
-    }
-
-    async computeHMAC(key, data) {
-        const keyBuffer = (key instanceof Uint8Array) ? key : new TextEncoder().encode(key);
-        const dataBuffer = (data instanceof Uint8Array) ? data : new TextEncoder().encode(data);
-        const cryptoKey = await crypto.subtle.importKey('raw', keyBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-        const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
-        return new Uint8Array(signature);
-    }
-
-    async verifyHMAC(key, data, expectedTag) {
-        const computedTag = await this.computeHMAC(key, data);
-        return this.constantTimeEquals(computedTag, expectedTag);
-    }
-
-    constantTimeEquals(a, b) {
-        if (a.length !== b.length) return false;
-        let r = 0; for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
-        return r === 0;
-    }
-
-    async generatePRFStream(seed, context, length) {
-        let output = new Uint8Array(0);
-        let counter = 0;
-        while (output.length < length) {
-            const ctx = new Uint8Array(context.length + 4);
-            ctx.set(context);
-            ctx.set(new Uint8Array([
-                (counter >> 24) & 0xff, (counter >> 16) & 0xff, (counter >> 8) & 0xff, counter & 0xff
-            ]), context.length);
-            const chunk = await this.computeHMAC(seed, ctx);
-            const next = new Uint8Array(output.length + chunk.length);
-            next.set(output); next.set(chunk, output.length);
-            output = next;
-            counter++;
-        }
-        return output.slice(0, length);
-    }
-
-    generateRandomPartition(n, minParts = 2, maxParts = 8) {
-        // Ensure n is a number and non-negative
-        n = Math.max(0, Number(n) || 0);
-        
-        // Ensure parts is at least minParts, even if n is very small
-        const parts = Math.min(maxParts, Math.max(minParts, Math.min(n, 8)));
-        
-        // Handle n=0 case: return an array of 'parts' count, with zeros
-        if (n === 0) {
-            return new Array(parts).fill(0);
-        }
-
-        const partition = new Array(parts).fill(1);
-        let remaining = Math.max(0, n - parts);
-        
-        while (remaining > 0) {
-            const idx = this.csprngInt(parts);
-            const add = Math.min(remaining, 1 + this.csprngInt(10));
-            partition[idx] += add;
-            remaining -= add;
-        }
-        
-        for (let i = partition.length - 1; i > 0; i--) {
-            const j = this.csprngInt(i + 1);
-            [partition[i], partition[j]] = [partition[j], partition[i]];
-        }
-        return partition;
-    }
-
-    async generateBitPositions(seed, fileHashHex, chunkId, partition, totalBits) {
-        const allPositions = [];
-        const fileHashBuf = new Uint8Array(this.hexToBuffer(fileHashHex));
-        for (let partId = 0; partId < partition.length; partId++) {
-            const context = new Uint8Array(32 + 4 + 4);
-            context.set(fileHashBuf, 0);
-            context.set(new Uint8Array([
-                (chunkId >> 24) & 0xff, (chunkId >> 16) & 0xff, (chunkId >> 8) & 0xff, chunkId & 0xff
-            ]), 32);
-            context.set(new Uint8Array([
-                (partId >> 24) & 0xff, (partId >> 16) & 0xff, (partId >> 8) & 0xff, partId & 0xff
-            ]), 36);
-
-            // Use the number of bits to flip from the partition plan
-            const numPositions = partition[partId]; 
-            if (numPositions === 0) continue; // Skip if this partition has 0 bits
-
-            const stream = await this.generatePRFStream(seed, context, numPositions * 4 + 16);
-            const positions = new Set();
-            for (let i = 0; i + 3 < stream.length && positions.size < numPositions; i += 4) {
-                const value = (stream[i] << 24) | (stream[i + 1] << 16) | (stream[i + 2] << 8) | stream[i + 3];
-                const pos = Math.abs(value) % totalBits;
-                positions.add(pos);
-            }
-            while (positions.size < numPositions) {
-                const rb = this.generateRandomBytes(4);
-                const value = (rb[0] << 24) | (rb[1] << 16) | (rb[2] << 8) | rb[3];
-                positions.add(Math.abs(value) % totalBits);
-            }
-            allPositions.push(...Array.from(positions));
-        }
-        return allPositions;
-    }
-
-    flipBits(data, positions) {
-        const result = new Uint8Array(data);
-        for (const position of positions) {
-            const byteIndex = Math.floor(position / 8);
-            const bitIndex = position % 8;
-            if (byteIndex < result.length) result[byteIndex] ^= (1 << (7 - bitIndex));
-        }
-        return result;
-    }
-
-    base85Encode(data) {
-        let binary = ''; for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
-        return btoa(binary);
-    }
-
-    base85Decode(str) {
-        const binary = atob(str);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return bytes;
-    }
-
-    async createCompactKey(keyString, salt, iterations, partition, bases, fileHashHex, seed) {
+    async createCompactKey(keyString, salt, iterations, partition, bases, fileHashHex, seed, encodedStrings, originalBitLength) {
+        // build header JSON and HMAC it
         const { masterKey, macKey } = await this.deriveKeysFromKeyString(keyString, salt, iterations);
-        const encryptedSeed = this.xorEncryptDecrypt(seed, masterKey);
-        const header = new Uint8Array(4 + 32 + 4 + 32 + 1 + partition.length * 2 + 1 + bases.length + 32);
-        let off = 0;
-        header.set(new Uint8Array([0, 0, 0, this.VERSION]), off); off += 4;
-        header.set(salt, off); off += 32;
-        header.set(new Uint8Array([(iterations >> 24) & 0xff, (iterations >> 16) & 0xff, (iterations >> 8) & 0xff, iterations & 0xff]), off); off += 4;
-        header.set(encryptedSeed, off); off += 32;
-        header[off++] = partition.length;
-        for (const p of partition) { header.set(new Uint8Array([(p >> 8) & 0xff, p & 0xff]), off); off += 2; }
-        header[off++] = bases.length;
-        for (const b of bases) header[off++] = b;
-        header.set(new Uint8Array(this.hexToBuffer(fileHashHex)), off);
-
-        const tag = await this.computeHMAC(macKey, header);
-        const combined = new Uint8Array(header.length + tag.length);
-        combined.set(header, 0); combined.set(tag, header.length);
-
+        const encSeed = this.xorEncryptDecrypt(seed, masterKey);
+        const headerObj = {
+            version: this.VERSION,
+            salt: btoa(String.fromCharCode(...salt)),
+            iterations,
+            encryptedSeed: btoa(String.fromCharCode(...encSeed)),
+            partition,
+            bases,
+            fileHashHex,
+            encodedStrings, // array of strings per partition
+            originalBitLength // store the original bit count so we can strip padding on decrypt
+        };
+        const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
+        const tag = await this.computeHMAC(macKey, headerBytes);
+        const combined = new Uint8Array(headerBytes.length + tag.length);
+        combined.set(headerBytes, 0); combined.set(tag, headerBytes.length);
         const base = this.base85Encode(combined);
         const checksum = (await this.sha256(base)).slice(0, 8);
         return `NEC${checksum}${base}`;
@@ -272,27 +82,42 @@ class NECrypto {
         if (checksum !== computed) throw new Error('Key checksum mismatch');
 
         const combined = this.base85Decode(base);
+        if (combined.length < 32) throw new Error('Invalid header payload');
         const headerLen = combined.length - 32;
-        const header = combined.slice(0, headerLen);
+        const headerBytes = combined.slice(0, headerLen);
         const expectedTag = combined.slice(headerLen);
 
-        let off = 0;
-        const version = (header[off] << 24) | (header[off + 1] << 16) | (header[off + 2] << 8) | header[off + 3]; off += 4;
-        const salt = header.slice(off, off + 32); off += 32;
-        const iterations = (header[off] << 24) | (header[off + 1] << 16) | (header[off + 2] << 8) | header[off + 3]; off += 4;
-        const encryptedSeed = header.slice(off, off + 32); off += 32;
-        const partLen = header[off++]; const partition = [];
-        for (let i = 0; i < partLen; i++) { partition.push((header[off] << 8) | header[off + 1]); off += 2; }
-        const baseLen = header[off++]; const bases = [];
-        for (let i = 0; i < baseLen; i++) bases.push(header[off++]);
-        const fileHashHex = this.bufferToHex(header.slice(off, off + 32));
+        // derive macKey to verify
+        const hdrText = new TextDecoder().decode(headerBytes);
+        const headerObj = JSON.parse(hdrText);
+        try {
+            const encodedInfo = Array.isArray(headerObj.encodedStrings) ? headerObj.encodedStrings.map(s => s ? s.length : 0) : [];
+            console.log('parseCompactKeyFromHeader: header parsed', { version: headerObj.version, partition: headerObj.partition, bases: headerObj.bases, fileHashHex: headerObj.fileHashHex, encodedLengths: encodedInfo });
+        } catch (e) {
+            console.warn('parseCompactKeyFromHeader: header logging failed', e);
+        }
+        const salt = new Uint8Array(Array.from(atob(headerObj.salt)).map(c => c.charCodeAt(0)));
+        const iterations = headerObj.iterations;
 
         const { masterKey, macKey } = await this.deriveKeysFromKeyString(keyString, salt, iterations);
-        const ok = await this.verifyHMAC(macKey, header, expectedTag);
+        const ok = await this.verifyHMAC(macKey, headerBytes, expectedTag);
         if (!ok) throw new Error('Key verification failed - invalid key');
 
-        const seed = this.xorEncryptDecrypt(encryptedSeed, masterKey);
-        return { version, salt, iterations, partition, bases, fileHash: fileHashHex, seed, macKey };
+        const encSeed = new Uint8Array(Array.from(atob(headerObj.encryptedSeed)).map(c => c.charCodeAt(0)));
+        const seed = this.xorEncryptDecrypt(encSeed, masterKey);
+
+        return {
+            version: headerObj.version,
+            salt,
+            iterations,
+            partition: headerObj.partition,
+            bases: headerObj.bases,
+            fileHash: headerObj.fileHashHex,
+            seed,
+            encodedStrings: headerObj.encodedStrings,
+            macKey,
+            originalBitLength: headerObj.originalBitLength
+        };
     }
 
     // AI-enhanced file analysis
@@ -401,8 +226,420 @@ class NECrypto {
         return 'application/octet-stream';
     }
 
+    // ------------------ Cryptographic & utility helpers ------------------
+    generateRandomBytes(size) {
+        // crypto.getRandomValues has a platform limit (commonly 65536 bytes).
+        const maxChunk = this.MAX_CRYPTO_RANDOM_BYTES || 65536;
+        if (size <= maxChunk) {
+            const a = new Uint8Array(size);
+            crypto.getRandomValues(a);
+            return a;
+        }
+        const out = new Uint8Array(size);
+        let offset = 0;
+        while (offset < size) {
+            const chunk = Math.min(maxChunk, size - offset);
+            const tmp = new Uint8Array(chunk);
+            crypto.getRandomValues(tmp);
+            out.set(tmp, offset);
+            offset += chunk;
+        }
+        return out;
+    }
+
+    generateKeyString() {
+        // Human-friendly key string (base64 of 32 random bytes)
+        const b = this.generateRandomBytes(32);
+        let s = '';
+        for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+        return btoa(s);
+    }
+
+    bufferToHex(buf) {
+        if (buf instanceof ArrayBuffer) buf = new Uint8Array(buf);
+        return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    hexToBuffer(hex) {
+        const out = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+        return out;
+    }
+
+    base85Encode(data) {
+        let binary = '';
+        for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
+        return btoa(binary);
+    }
+
+    base85Decode(str) {
+        const binary = atob(str);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    }
+
+    async sha256(input) {
+        let data;
+        if (typeof input === 'string') data = new TextEncoder().encode(input);
+        else data = input;
+        const h = await crypto.subtle.digest('SHA-256', data);
+        return this.bufferToHex(new Uint8Array(h));
+    }
+
+    async deriveKeysFromKeyString(keyString, salt, iterations) {
+        const pw = new TextEncoder().encode(keyString);
+        const baseKey = await crypto.subtle.importKey('raw', pw, { name: 'PBKDF2' }, false, ['deriveBits']);
+        const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' }, baseKey, 512);
+        const buf = new Uint8Array(bits);
+        const masterKey = buf.slice(0, 32);
+        const macRaw = buf.slice(32, 64);
+        const macKey = await crypto.subtle.importKey('raw', macRaw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+        return { masterKey, macKey };
+    }
+
+    async computeHMAC(macKey, data) {
+        if (!(data instanceof Uint8Array)) data = new Uint8Array(data);
+        const sig = await crypto.subtle.sign('HMAC', macKey, data);
+        return new Uint8Array(sig);
+    }
+
+    async verifyHMAC(macKey, data, expected) {
+        const sig = await this.computeHMAC(macKey, data);
+        return this.constantTimeEquals(sig, expected);
+    }
+
+    xorEncryptDecrypt(data, key) {
+        const out = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) out[i] = data[i] ^ key[i % key.length];
+        return out;
+    }
+
+    csprngInt(maxExclusive) {
+        if (maxExclusive <= 0) return 0;
+        const r = this.generateRandomBytes(4).reduce((a, b) => (a << 8) | b, 0) >>> 0;
+        return r % maxExclusive;
+    }
+
+    generateRandomPartition(totalBits, parts, maxPart) {
+        if (parts <= 0) return [];
+        // split roughly evenly and distribute remainder
+        const base = Math.floor(totalBits / parts);
+        let rem = totalBits - base * parts;
+        const out = new Array(parts).fill(base);
+        for (let i = 0; i < parts && rem > 0; i++, rem--) out[i]++;
+        return out;
+    }
+
+    constantTimeEquals(a, b) {
+        if (a.length !== b.length) return false;
+        let r = 0;
+        for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
+        return r === 0;
+    }
+
+    async generateBitPositions(seed, fileHashHex, chunkId, partition, chunkBitLen) {
+        // Deterministic PRF using repeated SHA-256 to generate pseudorandom integers
+        const needed = partition.reduce((s, x) => s + x, 0);
+        const positions = new Set();
+        if (chunkBitLen <= 0 || needed <= 0) return [];
+        let counter = 0;
+        while (positions.size < needed) {
+            const ctx = new Uint8Array(seed.length + fileHashHex.length + 8 + 4);
+            ctx.set(seed, 0);
+            ctx.set(new TextEncoder().encode(fileHashHex), seed.length);
+            const dv = new DataView(ctx.buffer);
+            dv.setUint32(seed.length + fileHashHex.length, chunkId || 0);
+            dv.setUint32(seed.length + fileHashHex.length + 4, counter++);
+            const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', ctx));
+            for (let i = 0; i + 3 < hash.length && positions.size < needed; i += 4) {
+                const v = (hash[i] << 24) | (hash[i+1] << 16) | (hash[i+2] << 8) | hash[i+3];
+                const pos = Math.abs(v) % chunkBitLen;
+                positions.add(pos);
+            }
+        }
+        // return flat array sorted
+        return Array.from(positions).sort((a,b)=>a-b);
+    }
+
+    flipBits(data, positions) {
+        const result = new Uint8Array(data);
+        for (const position of positions) {
+            const byteIndex = Math.floor(position / 8);
+            const bitIndex = position % 8;
+            if (byteIndex < result.length) result[byteIndex] ^= (1 << (7 - bitIndex));
+        }
+        return result;
+    }
+
+    // Bit helpers
+    getBit(bytes, pos) {
+        const byteIndex = Math.floor(pos / 8);
+        const bitIndex = pos % 8;
+        return (bytes[byteIndex] >> (7 - bitIndex)) & 1;
+    }
+
+    setBit(bytes, pos, val) {
+        const byteIndex = Math.floor(pos / 8);
+        const bitIndex = pos % 8;
+        if (val) bytes[byteIndex] |= (1 << (7 - bitIndex));
+        else bytes[byteIndex] &= ~(1 << (7 - bitIndex));
+    }
+
+    bytesToBits(bytes) {
+        const bits = new Array(bytes.length * 8);
+        for (let i = 0; i < bytes.length; i++) {
+            for (let b = 0; b < 8; b++) bits[i * 8 + b] = (bytes[i] >> (7 - b)) & 1;
+        }
+        return bits;
+    }
+
+    bitsToBytes(bits) {
+        const out = new Uint8Array(Math.ceil(bits.length / 8));
+        out.fill(0);
+        for (let i = 0; i < bits.length; i++) {
+            if (bits[i]) {
+                const byteIndex = Math.floor(i / 8);
+                const bitIndex = i % 8;
+                out[byteIndex] |= (1 << (7 - bitIndex));
+            }
+        }
+        return out;
+    }
+
+    // BigInt <-> base-N
+    bigintToBase(bi, base) {
+        const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+        if (base < 2 || base > alphabet.length) throw new Error('Unsupported base');
+        if (bi === 0n) return '0';
+        let x = bi < 0n ? -bi : bi;
+        let s = '';
+        while (x > 0n) {
+            const mod = x % BigInt(base);
+            s = alphabet[Number(mod)] + s;
+            x = x / BigInt(base);
+        }
+        return s;
+    }
+
+    baseToBigint(str, base) {
+        const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+        if (base < 2 || base > alphabet.length) throw new Error('Unsupported base');
+        let result = 0n;
+        for (let i = 0; i < str.length; i++) {
+            const idx = alphabet.indexOf(str[i]);
+            if (idx < 0 || idx >= base) throw new Error('Invalid digit for base');
+            result = result * BigInt(base) + BigInt(idx);
+        }
+        return result;
+    }
+
+    // Remove bits and encode per-partition into base-N strings
+    async removeBitsAndEncode(bytes, positionsGroups, bases) {
+        const bits = this.bytesToBits(bytes);
+        const totalBits = bits.length;
+        const removedMask = new Array(totalBits).fill(0);
+        const encodedStrings = [];
+        let outOfRangeCount = 0;
+        for (let i = 0; i < positionsGroups.length; i++) {
+            const posList = positionsGroups[i];
+            const base = bases && bases[i] ? bases[i] : this.BASES[i % this.BASES.length];
+            let bi = 0n;
+            for (let j = 0; j < posList.length; j++) {
+                const p = posList[j];
+                if (p < 0 || p >= totalBits) {
+                    console.error('removeBitsAndEncode: position out of range', { part: i, idx: j, pos: p, totalBits });
+                    outOfRangeCount++;
+                    continue;
+                }
+                const bit = bits[p];
+                bi = (bi << 1n) | BigInt(bit);
+                removedMask[p] = 1;
+            }
+            const s = this.bigintToBase(bi, base);
+            encodedStrings.push(s);
+        }
+        const remainingBits = [];
+        for (let i = 0; i < bits.length; i++) if (!removedMask[i]) remainingBits.push(bits[i]);
+        const remainingBytes = this.bitsToBytes(remainingBits);
+        try {
+            const actualRemoved = positionsGroups.reduce((a,b)=>a+b.length,0) - outOfRangeCount;
+            console.log('removeBitsAndEncode: totalBits, actualRemoved, skippedOutOfRange, remainingBitsLen, encodedLengths=', {
+                totalBits,
+                actualRemoved,
+                outOfRangeCount,
+                remainingBitsLen: remainingBits.length,
+                check: 'totalBits(' + totalBits + ') - actualRemoved(' + actualRemoved + ') = ' + (totalBits - actualRemoved) + ' vs remainingBitsLen(' + remainingBits.length + ')'
+            });
+        } catch (e) { console.warn('removeBitsAndEncode: debug log failed', e); }
+        return { remainingBytes, encodedStrings };
+    }
+
+    async decodeAndInsertBits(remainingBytes, positionsGroups, encodedStrings, bases) {
+        const remainingBits = this.bytesToBits(remainingBytes);
+        const totalBits = positionsGroups.reduce((a, b) => a + b.length, 0) + remainingBits.length;
+        const reconstructed = new Array(totalBits).fill(null);
+        for (let i = 0; i < positionsGroups.length; i++) {
+            const posList = positionsGroups[i];
+            const base = bases && bases[i] ? bases[i] : this.BASES[i % this.BASES.length];
+            const s = encodedStrings[i] || '0';
+            const bi = this.baseToBigint(s, base);
+            const needed = posList.length;
+            const partBits = new Array(needed).fill(0);
+            // Extract bits in MSB-first order (matching the encoding direction)
+            // The BigInt was built by shifting left and adding bits, so we extract
+            // by counting down from the highest bit position.
+            if (needed > 0) {
+                // Find the highest set bit (or assume needed bits exist)
+                let temp = bi;
+                for (let k = 0; k < needed; k++) {
+                    // Extract bits from MSB position down to LSB
+                    const bitPos = needed - 1 - k;
+                    partBits[k] = Number((temp >> BigInt(bitPos)) & 1n);
+                }
+            }
+            for (let j = 0; j < posList.length; j++) {
+                const p = posList[j];
+                if (p < 0 || p >= reconstructed.length) {
+                    console.error('decodeAndInsertBits: position out of range', { part: i, idx: j, pos: p, reconstructedLen: reconstructed.length });
+                    continue;
+                }
+                reconstructed[p] = partBits[j];
+            }
+        }
+        let remIdx = 0;
+        for (let i = 0; i < reconstructed.length; i++) {
+            if (reconstructed[i] === null) {
+                reconstructed[i] = remainingBits[remIdx++] || 0;
+            }
+        }
+        // check for nulls (shouldn't happen)
+        const nullCount = reconstructed.reduce((c, v) => c + (v === null ? 1 : 0), 0);
+        if (nullCount > 0) console.error('decodeAndInsertBits: reconstructed contains nulls', nullCount);
+        const outBytes = this.bitsToBytes(reconstructed);
+        try { console.log('decodeAndInsertBits: totalBits, outBytesLen, expectedBits=', { totalBits, outBytesLen: outBytes.length, expectedBits: reconstructed.length }); } catch(e){}
+        return outBytes;
+    }
+
     generateTestData(size = 1024 * 1024) { return this.generateRandomBytes(size); }
+
+    // ==================== STREAMING / CHUNKED PROCESSING ====================
+    // For large files on low-resource devices, process in chunks to avoid OOM
+
+    async streamingRemoveBitsAndEncode(fileBuffer, positionsGroups, bases, yieldInterval = 50000) {
+        // Optimized to avoid O(n) iterations on all bits
+        // Instead: process only removed bit positions, then collect remaining bits by byte-range iteration
+        const totalBits = fileBuffer.length * 8;
+        const totalBytes = fileBuffer.length;
+        const encodedStrings = [];
+
+        // Step 1: Extract and encode removed bits per partition
+        for (let partIdx = 0; partIdx < positionsGroups.length; partIdx++) {
+            const posList = positionsGroups[partIdx];
+            const base = bases[partIdx];
+            let bi = 0n;
+
+            for (let posIdx = 0; posIdx < posList.length; posIdx++) {
+                const p = posList[posIdx];
+                if (p < 0 || p >= totalBits) continue;
+                const byteIndex = Math.floor(p / 8);
+                const bitIndex = p % 8;
+                const byte = fileBuffer[byteIndex];
+                const bit = (byte >> (7 - bitIndex)) & 1;
+                bi = (bi << 1n) | BigInt(bit);
+
+                // Yield periodically to avoid blocking the UI
+                if (posIdx % yieldInterval === 0) await new Promise(r => setTimeout(r, 0));
+            }
+
+            const s = this.bigintToBase(bi, base);
+            encodedStrings.push(s);
+        }
+
+        // Step 2: Build a Set of removed positions for quick lookup
+        const removedPositions = new Set();
+        for (const posList of positionsGroups) {
+            for (const p of posList) removedPositions.add(p);
+        }
+
+        // Step 3: Collect remaining bits by iterating bytes and bits within each byte
+        // This is O(n) but only in the byte-level outer loop, not the full bit iteration
+        const remainingBitsArray = [];
+        let bitCount = 0;
+        for (let byteIdx = 0; byteIdx < totalBytes; byteIdx++) {
+            const byte = fileBuffer[byteIdx];
+            for (let bitIdx = 0; bitIdx < 8; bitIdx++) {
+                const globalBitPos = byteIdx * 8 + bitIdx;
+                if (globalBitPos >= totalBits) break; // safety check for last partial byte
+                if (!removedPositions.has(globalBitPos)) {
+                    const bit = (byte >> (7 - bitIdx)) & 1;
+                    remainingBitsArray.push(bit);
+                }
+            }
+            // Yield periodically to prevent UI freeze
+            if (byteIdx % (yieldInterval * 8) === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+
+        const remainingBytes = this.bitsToBytes(remainingBitsArray);
+        console.log('streamingRemoveBitsAndEncode: totalBits, removedCount, remainingBytesLen, encodedLengths=', {
+            totalBits,
+            removedCount: positionsGroups.reduce((a, b) => a + b.length, 0),
+            remainingBytesLen: remainingBytes.length,
+            encodedLengths: encodedStrings.map(s => s.length)
+        });
+        return { remainingBytes, encodedStrings };
+    }
+
+    async streamingDecodeAndInsertBits(remainingBytes, positionsGroups, encodedStrings, bases) {
+        // Reconstruct the original file by inserting bits back at their positions
+        // This also works in-place without requiring full file in memory during bit insertion
+        const remainingBits = this.bytesToBits(remainingBytes);
+        const totalBits = positionsGroups.reduce((a, b) => a + b.length, 0) + remainingBits.length;
+
+        // Build a map of position -> bit value for quick lookup
+        const positionToBit = new Map();
+        for (let partIdx = 0; partIdx < positionsGroups.length; partIdx++) {
+            const posList = positionsGroups[partIdx];
+            const base = bases[partIdx];
+            const s = encodedStrings[partIdx] || '0';
+            const bi = this.baseToBigint(s, base);
+            const needed = posList.length;
+
+            // Extract bits in MSB-first order
+            if (needed > 0) {
+                for (let k = 0; k < needed; k++) {
+                    const bitPos = needed - 1 - k;
+                    const bit = Number((bi >> BigInt(bitPos)) & 1n);
+                    const p = posList[k];
+                    positionToBit.set(p, bit);
+                }
+            }
+        }
+
+        // Reconstruct the bit array by filling positions with their bits, and remaining slots with remaining bits
+        const reconstructed = new Array(totalBits).fill(null);
+        for (const [pos, bit] of positionToBit.entries()) {
+            if (pos >= 0 && pos < totalBits) {
+                reconstructed[pos] = bit;
+            }
+        }
+
+        let remIdx = 0;
+        for (let i = 0; i < reconstructed.length; i++) {
+            if (reconstructed[i] === null) {
+                reconstructed[i] = remainingBits[remIdx++] || 0;
+            }
+        }
+
+        const outBytes = this.bitsToBytes(reconstructed);
+        console.log('streamingDecodeAndInsertBits: totalBits, outBytesLen=', { totalBits, outBytesLen: outBytes.length });
+        return outBytes;
+    }
 }
+
+
 
 
 // -----------------------------------------------------------------
@@ -611,7 +848,12 @@ class NECApp {
                 // 1. Get parameters from the AI analysis
                 corruptionRatio = this.fileAnalysis.corruptionRatio;
                 partitionCount = this.fileAnalysis.partitionCount;
-                bases = this.fileAnalysis.bases;
+                // Generate bases matching partitionCount (need one base per partition)
+                const shuffledBases = [...this.crypto.BASES].sort(() => 0.5 - Math.random());
+                bases = [];
+                for (let i = 0; i < partitionCount; i++) {
+                    bases.push(shuffledBases[i % shuffledBases.length]);
+                }
                 
             } else {
                 // 2. HEURISTIC: Generate NEW random parameters *every time*
@@ -625,10 +867,13 @@ class NECApp {
                 // Generate a random partition count (2 to 8)
                 partitionCount = 2 + this.crypto.csprngInt(7); 
 
-                // Generate a random set of bases
-                const numBases = 2 + this.crypto.csprngInt(3); // 2, 3, or 4
+                // Generate bases matching partitionCount (need one base per partition)
                 const shuffledBases = [...this.crypto.BASES].sort(() => 0.5 - Math.random());
-                bases = shuffledBases.slice(0, numBases);
+                // Use as many bases as we have, but at least partitionCount (cycle through if needed)
+                bases = [];
+                for (let i = 0; i < partitionCount; i++) {
+                    bases.push(shuffledBases[i % shuffledBases.length]);
+                }
                 
                 // --- UPDATE UI to show what we generated ---
                 document.getElementById('encrypt-ratio').textContent = `${(corruptionRatio * 100).toFixed(3)}%`;
@@ -656,31 +901,68 @@ class NECApp {
 
             this.showProgress('encrypt', 25);
 
-            const encryptedChunks = [];
-            const cs = this.crypto.CHUNK_SIZE;
-            for (let i = 0; i < data.length; i += cs) {
-                const chunk = data.slice(i, Math.min(i + cs, data.length));
-                const chunkId = Math.floor(i / cs);
-                const positions = await this.crypto.generateBitPositions(seed, fileHash, chunkId, partition, chunk.length * 8);
-                encryptedChunks.push(this.crypto.flipBits(chunk, positions));
-                this.showProgress('encrypt', 25 + (i / data.length) * 50);
+            // Removal-based scheme: generate positions grouped per partition across whole file
+            // For each partition, generate positions within the whole file bit range. We'll produce an array of arrays.
+            const positionsGroups = [];
+            // generate per-partition bit positions deterministically (we call generateBitPositions per partition index)
+            for (let pIdx = 0; pIdx < partition.length; pIdx++) {
+                // generate as if chunkId==pIdx to keep deterministic but unique context
+                const posList = await this.crypto.generateBitPositions(seed, fileHash, pIdx, [partition[pIdx]], totalBits);
+                positionsGroups.push(posList.slice(0, partition[pIdx]));
             }
-            
-            const encryptedData = new Uint8Array(data.length);
-            let off = 0;
-            for (const c of encryptedChunks) {
-                encryptedData.set(c, off);
-                off += c.length;
+
+            try {
+                console.log('encrypt: partition count=' + partition.length + ' bases count=' + bases.length + ' bases=' + JSON.stringify(bases));
+                console.log('encrypt: partition, bases, positionsCounts, firstPositions (per part):', {
+                    partition, bases,
+                    positionsCounts: positionsGroups.map(g => g.length),
+                    positionsPreview: positionsGroups.map(g => g.slice(0,5))
+                });
+            } catch (e) { console.warn('encrypt: debug log failed', e); }
+
+            // Use streaming for large files (>10MB) to reduce memory usage
+            let remainingBytes, encodedStrings;
+            if (data.length > 10 * 1024 * 1024) {
+                console.log('encrypt: using streaming mode for large file');
+                const result = await this.crypto.streamingRemoveBitsAndEncode(data, positionsGroups, bases);
+                remainingBytes = result.remainingBytes;
+                encodedStrings = result.encodedStrings;
+            } else {
+                const result = await this.crypto.removeBitsAndEncode(data, positionsGroups, bases);
+                remainingBytes = result.remainingBytes;
+                encodedStrings = result.encodedStrings;
             }
+
+            try {
+                console.log('encrypt: encodedStrings lengths', encodedStrings.map(s => s.length));
+            } catch (e) { console.warn('encrypt: encodedStrings log failed', e); }
+
+            const encryptedData = remainingBytes;
 
             this.showProgress('encrypt', 75);
             const encryptedHash = await this.crypto.sha256(encryptedData);
             document.getElementById('encrypted-hash').textContent = encryptedHash;
 
             // --- USE THE NEW DYNAMIC 'bases' VARIABLE ---
+            // Pass the original bit length so we can strip padding during decryption
+            const originalBitLength = data.length * 8;
             const headerString = await this.crypto.createCompactKey(
-                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed
+                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, fileHash, seed, encodedStrings, originalBitLength
             );
+
+            console.log('encrypt: headerString length', headerString.length, 'preview:', headerString.slice(0, 128));
+            
+            // Debug: show what's actually in the header
+            try {
+                const checksum = headerString.substring(3, 11);
+                const base = headerString.substring(11);
+                const combined = this.crypto.base85Decode(base);
+                const headerLen = combined.length - 32;
+                const headerBytes = combined.slice(0, headerLen);
+                const hdrText = new TextDecoder().decode(headerBytes);
+                const headerObj = JSON.parse(hdrText);
+                console.log('encrypt: header contents - partition.length=' + headerObj.partition.length + ' bases.length=' + (headerObj.bases || []).length + ' bases=' + JSON.stringify(headerObj.bases));
+            } catch (e) { console.warn('encrypt: header inspection failed', e); }
 
             const preface = `NECHDR\n${headerString}\nENDHDR\n`;
             const prefaceBytes = new TextEncoder().encode(preface);
@@ -688,6 +970,23 @@ class NECApp {
             finalData.set(prefaceBytes, 0);
             finalData.set(encryptedData, prefaceBytes.length);
             this.encryptedData = finalData;
+            
+            // Debug: show exact byte positions
+            const startMarkerBytes = new TextEncoder().encode('NECHDR\n');
+            const endMarkerBytes = new TextEncoder().encode('\nENDHDR\n');
+            console.log('encrypt: marker lengths:', {
+                startMarkerLen: startMarkerBytes.length,
+                endMarkerLen: endMarkerBytes.length,
+                headerStringLen: headerString.length,
+                headerStringBytes: new TextEncoder().encode(headerString).length
+            });
+            
+            console.log('encrypt: file layout:', {
+                prefaceLen: prefaceBytes.length,
+                encryptedDataLen: encryptedData.length,
+                totalLen: finalData.length,
+                expectedDataStart: startMarkerBytes.length + new TextEncoder().encode(headerString).length + endMarkerBytes.length
+            });
 
             this.showProgress('encrypt', 100);
 
@@ -723,43 +1022,129 @@ class NECApp {
         this.showProgress('decrypt', 0);
         
         try {
-            const raw = new Uint8Array(await this.encryptedFile.arrayBuffer());
+            let raw;
+            try {
+                raw = new Uint8Array(await this.encryptedFile.arrayBuffer());
+            } catch (readErr) {
+                console.error('decrypt: failed to read encryptedFile.arrayBuffer()', readErr);
+                this.showError('Failed to read the selected file. Please re-select the .nec file (it may have been moved, deleted, or permissioned).');
+                // Focus and clear the file input to prompt user to reselect
+                const input = document.getElementById('decrypt-file');
+                if (input) {
+                    try { input.value = null; input.click(); } catch (e) { /* ignore */ }
+                }
+                // Stop decryption flow
+                return;
+            }
 
-            const scanLen = Math.min(65536, raw.length);
-            const headText = new TextDecoder().decode(raw.slice(0, scanLen));
+            // Byte-level search for header markers (more robust than string-based decoding)
             const startMarker = 'NECHDR\n';
             const endMarker = '\nENDHDR\n';
+            const startMarkerBytes = new TextEncoder().encode(startMarker);
+            const endMarkerBytes = new TextEncoder().encode(endMarker);
+
+            // Helper to find subarray (like indexOf for Uint8Array)
+            const indexOfSubarray = (buf, pat, from = 0) => {
+                const limit = buf.length - pat.length;
+                outer: for (let i = from; i <= limit; i++) {
+                    for (let j = 0; j < pat.length; j++) if (buf[i + j] !== pat[j]) continue outer;
+                    return i;
+                }
+                return -1;
+            };
+
+            // Search for markers starting from the beginning
+            let startIdx = indexOfSubarray(raw, startMarkerBytes, 0);
+            if (startIdx < 0) throw new Error('Missing key header in file');
+
+            // Search for end marker starting from after the start marker
+            let endIdx = indexOfSubarray(raw, endMarkerBytes, startIdx + startMarkerBytes.length);
+            if (endIdx < 0) {
+                // Try expanding search in case of large files; scan more aggressively
+                const EXPANDED_SCAN = Math.min(raw.length, 5 * 1024 * 1024); // 5 MB
+                endIdx = indexOfSubarray(raw.subarray(0, EXPANDED_SCAN), endMarkerBytes, startIdx + startMarkerBytes.length);
+                if (endIdx >= 0) {
+                    endIdx = endIdx; // Already correct since we're searching from 0
+                } else {
+                    endIdx = -1;
+                }
+            }
+            if (endIdx < 0) throw new Error('Corrupted key header in file (END marker missing)');
+
+            console.log('Header scan (bytes):', { startIdx, endIdx, startMarkerLen: startMarkerBytes.length, endMarkerLen: endMarkerBytes.length });
+
+            // Extract header bytes and decode safely
+            // startIdx = byte index of 'N' in 'NECHDR\n'
+            // endIdx = byte index of '\n' in '\nENDHDR\n' (the starting \n)
+            // headerContent should be from after 'NECHDR\n' to before '\nENDHDR\n'
+            const headerBytes = raw.slice(startIdx + startMarkerBytes.length, endIdx);
+            const headerString = new TextDecoder().decode(headerBytes);
+            // remainingBytes start after the complete '\nENDHDR\n' marker
+            const headerBytesLen = endIdx + endMarkerBytes.length;
             
-            if (!headText.startsWith(startMarker)) throw new Error('Missing key header in file');
-            const endIdx = headText.indexOf(endMarker);
-            if (endIdx < 0) throw new Error('Corrupted key header in file');
-            
-            const headerString = headText.substring(startMarker.length, endIdx);
-            const headerBytesLen = new TextEncoder().encode(headText.substring(0, endIdx + endMarker.length)).length;
+            console.log('decrypt: header parsing details:', { 
+                startIdx, 
+                endIdx, 
+                startMarkerLen: startMarkerBytes.length,
+                endMarkerLen: endMarkerBytes.length,
+                headerContentLen: headerBytes.length,
+                headerStringLen: headerString.length,
+                computedHeaderBytesLen: headerBytesLen,
+                rawLength: raw.length,
+                firstMarkerBytes: Array.from(raw.slice(startIdx, startIdx + startMarkerBytes.length)),
+                lastMarkerBytes: Array.from(raw.slice(endIdx, endIdx + endMarkerBytes.length))
+            });
 
             const keyData = await this.crypto.parseCompactKeyFromHeader(headerString, keyString);
             this.showProgress('decrypt', 25);
 
-            const encryptedData = raw.slice(headerBytesLen);
+            const remainingBytes = raw.slice(headerBytesLen);
+            try {
+                console.log('decrypt: headerBytesLen=', headerBytesLen, 'remainingBytesLen=', remainingBytes.length);
+                console.log('decrypt: parsed header partition/bases/encodedLengths=', {
+                    partition: keyData.partition,
+                    bases: keyData.bases,
+                    encodedLengths: (keyData.encodedStrings || []).map(s => s ? s.length : 0)
+                });
+                console.log('decrypt: loaded from header - originalBitLength=', keyData.originalBitLength, 'expectedOriginalFileHash=', keyData.fileHash);
+            } catch (e) { console.warn('decrypt: debug logs failed', e); }
 
-            const decryptedChunks = [];
-            const cs = this.crypto.CHUNK_SIZE;
-            for (let i = 0; i < encryptedData.length; i += cs) {
-                const chunk = encryptedData.slice(i, Math.min(i + cs, encryptedData.length));
-                const chunkId = Math.floor(i / cs);
-                const positions = await this.crypto.generateBitPositions(
-                    keyData.seed, keyData.fileHash, chunkId, keyData.partition, chunk.length * 8
-                );
-                decryptedChunks.push(this.crypto.flipBits(chunk, positions));
-                this.showProgress('decrypt', 25 + (i / encryptedData.length) * 60);
+            // Recompute positionsGroups deterministically (same method used at encryption)
+            const positionsGroups = [];
+            // Use the original bit length stored in the header to compute positions correctly
+            const totalBits = (keyData.originalBitLength && Number.isFinite(keyData.originalBitLength)) ? keyData.originalBitLength: (remainingBytes.length * 8 + keyData.partition.reduce((a, b) => a + b, 0));
+            for (let pIdx = 0; pIdx < keyData.partition.length; pIdx++) {
+                const posList = await this.crypto.generateBitPositions(keyData.seed, keyData.fileHash, pIdx, [keyData.partition[pIdx]], totalBits);
+                positionsGroups.push(posList.slice(0, keyData.partition[pIdx]));
+                if (pIdx < 4) console.log(`decrypt: positions preview for part ${pIdx}:`, positionsGroups[pIdx].slice(0,8));
+            }
+
+            // Use streaming for large files to reduce memory usage
+            let reconstructed;
+            if (remainingBytes.length > 10 * 1024 * 1024) {
+                console.log('decrypt: using streaming mode for large file');
+                reconstructed = await this.crypto.streamingDecodeAndInsertBits(remainingBytes, positionsGroups, keyData.encodedStrings || [], keyData.bases);
+            } else {
+                reconstructed = await this.crypto.decodeAndInsertBits(remainingBytes, positionsGroups, keyData.encodedStrings || [], keyData.bases);
             }
             
-            const restored = new Uint8Array(encryptedData.length);
-            let off = 0;
-            for (const c of decryptedChunks) {
-                restored.set(c, off);
-                off += c.length;
+            // Strip padding bits if originalBitLength is stored in header
+            try {
+                const bitsBeforePadding = reconstructed.length * 8;
+                const removedCount = keyData.partition.reduce((a,b)=>a+b,0);
+                const remainingBitsCount = remainingBytes.length * 8;
+                console.log('decrypt: reconstruction - bitsBeforePadding=' + bitsBeforePadding + ' removedBits=' + removedCount + ' remainingBits=' + remainingBitsCount + ' sum=' + (removedCount + remainingBitsCount));
+            } catch (e) { console.warn('decrypt: reconstruction log failed', e); }
+            
+            if (keyData.originalBitLength && keyData.originalBitLength < reconstructed.length * 8) {
+                const paddingBits = (reconstructed.length * 8) - keyData.originalBitLength;
+                console.log('decrypt: stripping', paddingBits, 'padding bits, reconstructed was', reconstructed.length, 'bytes, will be', Math.ceil(keyData.originalBitLength/8), 'bytes');
+                const bits = this.crypto.bytesToBits(reconstructed);
+                const originalBits = bits.slice(0, keyData.originalBitLength);
+                reconstructed = this.crypto.bitsToBytes(originalBits);
             }
+            
+            const restored = reconstructed;
 
             this.showProgress('decrypt', 80);
             const restoredHash = await this.crypto.sha256(restored);
@@ -829,18 +1214,45 @@ class NECApp {
             const partition = this.crypto.generateRandomPartition(1000, 3, 5);
             const bases = [12, 16, 20];
 
-            const positions = await this.crypto.generateBitPositions(seed, originalHash, 0, partition, testData.length * 8);
-            const encryptedData = this.crypto.flipBits(testData, positions);
+            // generate positionsGroups and remove bits
+            const positionsGroups = [];
+            const totalBits = testData.length * 8;
+            for (let pIdx = 0; pIdx < partition.length; pIdx++) {
+                const posList = await this.crypto.generateBitPositions(seed, originalHash, pIdx, [partition[pIdx]], totalBits);
+                positionsGroups.push(posList.slice(0, partition[pIdx]));
+            }
 
+            const { remainingBytes, encodedStrings } = await this.crypto.removeBitsAndEncode(testData, positionsGroups, bases);
+
+            const originalBitLength = testData.length * 8;
             const headerString = await this.crypto.createCompactKey(
-                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, originalHash, seed
+                keyString, salt, this.crypto.KDF_ITERATIONS, partition, bases, originalHash, seed, encodedStrings, originalBitLength
             );
             const keyData = await this.crypto.parseCompactKeyFromHeader(headerString, keyString);
 
-            const decryptPositions = await this.crypto.generateBitPositions(
-                keyData.seed, keyData.fileHash, 0, keyData.partition, encryptedData.length * 8
-            );
-            const restoredData = this.crypto.flipBits(encryptedData, decryptPositions);
+            // Recompute positionsGroups and restore
+            const positionsGroups2 = [];
+            for (let pIdx = 0; pIdx < keyData.partition.length; pIdx++) {
+                const posList = await this.crypto.generateBitPositions(keyData.seed, keyData.fileHash, pIdx, [keyData.partition[pIdx]], totalBits);
+                positionsGroups2.push(posList.slice(0, keyData.partition[pIdx]));
+            }
+            let restoredData = await this.crypto.decodeAndInsertBits(remainingBytes, positionsGroups2, keyData.encodedStrings || [], keyData.bases);
+            
+            // Log reconstruction details
+            try {
+                const removedCount = keyData.partition.reduce((a,b)=>a+b,0);
+                const remainingBitsCount = remainingBytes.length * 8;
+                const bitsBeforePadding = restoredData.length * 8;
+                console.log('selfTest: reconstruction - bitsBeforePadding=' + bitsBeforePadding + ' removedBits=' + removedCount + ' remainingBits=' + remainingBitsCount + ' sum=' + (removedCount + remainingBitsCount));
+            } catch (e) { console.warn('selfTest: reconstruction log failed', e); }
+            
+            // Strip padding bits if stored in header
+            if (keyData.originalBitLength && keyData.originalBitLength < restoredData.length * 8) {
+                const paddingBits = (restoredData.length * 8) - keyData.originalBitLength;
+                const bits = this.crypto.bytesToBits(restoredData);
+                const originalBits = bits.slice(0, keyData.originalBitLength);
+                restoredData = this.crypto.bitsToBytes(originalBits);
+            }
 
             const restoredHash = await this.crypto.sha256(restoredData);
             const hashMatch = (originalHash === restoredHash);
@@ -861,7 +1273,6 @@ class NECApp {
                     Restored Hash: ${restoredHash.substring(0, 16)}...<br>
                     Key Length: ${headerString.length} chars<br>
                     Partition: [${partition.join(', ')}]<br>
-                    Positions Generated: ${positions.length}<br>
                     Data Match: ${dataMatch ? '✓' : '✗'}<br>
                     Hash Match: ${hashMatch ? '✓' : '✗'}<br>
                     Seed Recovery: ${seedMatch ? '✓' : '✗'}
